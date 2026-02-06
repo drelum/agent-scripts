@@ -44,13 +44,14 @@ Core workflow:
 
 ## Git
 - Safe by default: `git status/diff/log`. Push only when user asks.
+- Commit/push: sempre perguntar + esperar OK explicito do Andre antes de executar (mesmo se ja foi solicitado).
 - Branch changes require user consent.
 - Destructive ops forbidden unless explicit (`reset --hard`, `clean`, `restore`, `rm`, ...).
 - Remotes under `~/Projects`: prefer HTTPS; flip SSH->HTTPS before pull/push.
 - Don't delete unexpected stuff; stop + ask.
 - No repo-wide search/replace scripts; keep edits small/reviewable.
 - Avoid manual `git stash`; if Git auto-stashes during pull/rebase, that's fine (hint, not hard guardrail).
-- If user types a command ("pull and push"), that's consent for that command.
+- If user types a command ("pull and push"), that's intent for that command; still ask OK before commit/push.
 
 ## Language/Stack Notes
 - TypeScript: preferred
