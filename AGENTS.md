@@ -54,6 +54,7 @@ Core workflow:
 - If user types a command ("pull and push"), that's intent for that command; still ask OK before commit/push.
 
 ## Language/Stack Notes
+- Idioma: pt-BR em comentários e interface (UI); código/variáveis podem ser em inglês; atenção máxima à acentuação correta.
 - TypeScript: preferred
 - Biome lint
 
