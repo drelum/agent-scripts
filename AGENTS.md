@@ -27,6 +27,11 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 ## Flow & Runtime
 - Use repo's package manager/runtime; no swaps w/o approval.
 - Use Codex background for long jobs.
+- Servers via `tmux` (sessão sobrevive a crash): criar sessão (sem server) -> `send-keys` (start) -> informar `tmux attach -t <sessao>`. Ex:
+```bash
+s="$(basename "$PWD")"; tmux has -t "$s" 2>/dev/null || tmux new -d -s "$s" -c "$PWD"
+tmux send -t "$s" "cd '$PWD' && <comando-do-servidor>" C-m; tmux attach -t "$s"
+```
 
 ## Browser Automation
 Use `agent-browser` for web automation. Run `agent-browser --help` for all commands.
