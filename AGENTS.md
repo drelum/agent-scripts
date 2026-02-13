@@ -41,6 +41,7 @@ Core workflow:
 - Before handoff: full gate (biome check/typecheck/tests).
 - Lint == `biome check` only (no `pnpm lint`).
 - Keep it observable (logs, panes, tails).
+- Observabilidade (sempre): se eu iniciar algo em `tmux`, logo em seguida informar o comando completo de attach (`tmux attach -t <sessao>`). Se eu redirecionar output para arquivo, logo em seguida informar o comando completo de tail com caminho absoluto (sem precisar `cd`): `tail -n 200 -f /caminho/completo/para/arquivo.log`.
 
 ## Git
 - Safe by default: `git status/diff/log`. Push only when user asks.
@@ -57,6 +58,12 @@ Core workflow:
 - Idioma: pt-BR em comentários e interface (UI); código/variáveis podem ser em inglês; atenção máxima à acentuação correta.
 - TypeScript: preferred
 - Biome lint
+
+## Linear CLI
+Default esperado (máquina do Andre): `~/.config/linear/linear.toml` com `team_id = "ANDRE"` e `issue_sort = "priority"` (override: `--team` / `--sort`).
+Criar: `linear issue create --assignee self --team ANDRE -t "Bug: ..." -d "..."` | Listar: `linear issue list -A --all-states --team ANDRE --sort priority` | Atualizar: `linear issue update ANDRE-123`
+Buscar texto: `linear issue list -A --all-states --team ANDRE --sort priority --no-pager | rg -i "termo"`
+Ajuda: `linear --help` | `linear issue --help` | `linear auth --help`
 
 ## Critical Thinking
 - Fix root cause (not band-aid).

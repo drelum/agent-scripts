@@ -9,6 +9,7 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 
 ## AGENTS no formato ponteiro
 - O texto de guardrail compartilhado agora vive apenas neste repo: `AGENTS.MD` (regras compartilhadas + lista de ferramentas).
-- O `AGENTS.MD` de cada repo consumidor fica reduzido a linha: `READ ~/Projects/agent-scripts/AGENTS.MD BEFORE ANYTHING (skip if missing).` Regras especificas do repo so depois dessa linha, se realmente necessario.
+- O `AGENTS.MD` de cada repo consumidor fica reduzido a linha: `READ: ~/.codex/AGENTS.md` (regras especificas do repo so depois dessa linha, se realmente necessario).
 - Nao copie mais os blocos `[shared]` ou `<tools>` para outros repositorios. Em vez disso, mantenha este repo atualizado e faca os downstream relerem o `AGENTS.MD` ao iniciar o trabalho.
-- Ao atualizar as instrucoes compartilhadas, edite `agent-scripts/AGENTS.MD`, replique a mudanca em `~/AGENTS.MD` (global do Codex) e deixe os repos downstream continuarem referenciando o ponteiro.
+- Ao atualizar as instrucoes compartilhadas, edite `agent-scripts/AGENTS.MD`, replique a mudanca em `~/.codex/AGENTS.md` e deixe os repos downstream continuarem referenciando o ponteiro.
+- Padronizacao (global + projetos em `~/Projects`): `./script/ensure_agent_std.sh`
