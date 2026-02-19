@@ -55,6 +55,67 @@ checked=0
 skipped=0
 created=0
 renamed=0
+claude_created=0
+claude_linked=0
+claude_backed_up=0
+claude_skipped=0
+
+ensure_claude_link() {
+  local dir="$1"
+  local agents_path="$dir/AGENTS.md"
+  local claude_path="$dir/CLAUDE.md"
+  local existed=0
+
+  [[ -e "$agents_path" ]] || return 0
+
+  if [[ ! -w "$dir" ]]; then
+    echo "Aviso: sem permissão de escrita no diretório (CLAUDE.md): $dir" >&2
+    claude_skipped=$((claude_skipped + 1))
+    return 0
+  fi
+
+  # Já está apontando para o AGENTS.md do próprio projeto? Então OK.
+  if [[ -L "$claude_path" ]]; then
+    if command -v realpath >/dev/null 2>&1; then
+      local claude_real agents_real
+      claude_real="$(realpath "$claude_path" 2>/dev/null || true)"
+      agents_real="$(realpath "$agents_path" 2>/dev/null || true)"
+      if [[ -n "$claude_real" && -n "$agents_real" && "$claude_real" == "$agents_real" ]]; then
+        return 0
+      fi
+    elif command -v readlink >/dev/null 2>&1; then
+      local link_target
+      link_target="$(readlink "$claude_path" 2>/dev/null || true)"
+      if [[ "$link_target" == "AGENTS.md" || "$link_target" == "./AGENTS.md" ]]; then
+        return 0
+      fi
+    fi
+  fi
+
+  # Existe, mas não é o link desejado: preservar como backup e criar o symlink.
+  if [[ -e "$claude_path" || -L "$claude_path" ]]; then
+    existed=1
+    local ts backup
+    ts="$(date +%Y%m%d%H%M%S)"
+    backup="$dir/CLAUDE.md.bak.$ts"
+    if ! mv "$claude_path" "$backup"; then
+      echo "Aviso: falha ao mover para backup (CLAUDE.md): $claude_path" >&2
+      claude_skipped=$((claude_skipped + 1))
+      return 0
+    fi
+    claude_backed_up=$((claude_backed_up + 1))
+  fi
+
+  if ln -s "AGENTS.md" "$claude_path"; then
+    claude_linked=$((claude_linked + 1))
+    if [[ "$existed" -eq 0 ]]; then
+      claude_created=$((claude_created + 1))
+    fi
+  else
+    echo "Aviso: falha ao criar symlink (CLAUDE.md): $claude_path" >&2
+    claude_skipped=$((claude_skipped + 1))
+  fi
+}
 
 for dir in "$projects_root"/*; do
   [[ -d "$dir" ]] || continue
@@ -101,8 +162,11 @@ for dir in "$projects_root"/*; do
 
   checked=$((checked + 1))
 
+  # CLAUDE.md: sempre tentar padronizar, mesmo quando AGENTS.md não é gravável.
+  ensure_claude_link "$dir"
+
   if [[ ! -w "$f" ]]; then
-    echo "Aviso: sem permissão de escrita: $f" >&2
+    echo "Aviso: sem permissão de escrita (AGENTS.md): $f" >&2
     skipped=$((skipped + 1))
     continue
   fi
@@ -131,4 +195,4 @@ for dir in "$projects_root"/*; do
   updated=$((updated + 1))
 done
 
-echo "OK: projetos checados: $checked; criados: $created; renomeados: $renamed; atualizados: $updated; pulados: $skipped"
+echo "OK: projetos checados: $checked; criados: $created; renomeados: $renamed; atualizados: $updated; pulados: $skipped; CLAUDE.md links: $claude_linked; CLAUDE.md backups: $claude_backed_up; CLAUDE.md novos: $claude_created; CLAUDE.md pulados: $claude_skipped"
