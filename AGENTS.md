@@ -26,16 +26,20 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 
 ## Flow & Runtime
 - Use repo's package manager/runtime; no swaps w/o approval.
+- Dev server: prefer `portless`; if missing, install global `npm install -g portless`; do not add dependency to project; long-running server => `tmux` + `portless`; inside session prefer `portless run <comando>` (ex.: `portless run pnpm dev`); use explicit name only when stable shared URL needed (ex.: `portless api.myapp pnpm dev`); expected URL `http://<nome>.localhost:1355`; `portless` injects `PORT`, `HOST=127.0.0.1`, `PORTLESS_URL`; after start, always report `tmux attach -t <sessao>` + final URL.
 - Use Codex background for long jobs.
 - Servers via `tmux` (sessão sobrevive a crash): criar sessão (sem server) -> `send-keys` (start) -> informar `tmux attach -t <sessao>`. Ex:
 ```bash
 s="$(basename "$PWD")"; tmux has -t "$s" 2>/dev/null || tmux new -d -s "$s" -c "$PWD"
-tmux send -t "$s" "cd '$PWD' && <comando-do-servidor>" C-m; tmux attach -t "$s"
+tmux send -t "$s" "cd '$PWD' && portless run pnpm dev" C-m; tmux attach -t "$s"
 ```
 
 ## Build / Test
-- Before handoff: full gate (biome check/typecheck/tests).
+- Before handoff: full gate (biome check/typecheck/tests/knip).
 - Lint == `biome check` only (no `pnpm lint`).
+- Dependency/unused check: use `knip` to find unused dependencies, exports and files.
+- Suggested `check` script:
+  `biome check && pnpm exec tsc -p tsconfig.json --noEmit && pnpm test && pnpm dlx knip --no-progress`
 - Keep it observable (logs, panes, tails).
 - Observabilidade (sempre): se eu iniciar algo em `tmux`, logo em seguida informar o comando completo de attach (`tmux attach -t <sessao>`). Se eu redirecionar output para arquivo, logo em seguida informar o comando completo de tail com caminho absoluto (sem precisar `cd`): `tail -n 200 -f /caminho/completo/para/arquivo.log`.
 
@@ -54,6 +58,7 @@ tmux send -t "$s" "cd '$PWD' && <comando-do-servidor>" C-m; tmux attach -t "$s"
 - Idioma: pt-BR em comentários e interface (UI); código/variáveis podem ser em inglês; atenção máxima à acentuação correta.
 - TypeScript: preferred
 - Biome lint
+- Knip for unused code/dependencies
 
 ## Linear CLI
 Default esperado (máquina do Andre): `~/.config/linear/linear.toml` com `team_id = "ANDRE"` e `issue_sort = "priority"` (override: `--team` / `--sort`).

@@ -14,3 +14,16 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 - Nao copie mais os blocos `[shared]` ou `<tools>` para outros repositorios. Em vez disso, mantenha este repo atualizado e faca os downstream relerem o `AGENTS.MD` ao iniciar o trabalho.
 - Ao atualizar as instrucoes compartilhadas, edite `agent-scripts/AGENTS.MD`, replique a mudanca em `~/.codex/AGENTS.md` e deixe os repos downstream continuarem referenciando o ponteiro.
 - Padronizacao (global + projetos em `~/Projects`): `./script/ensure_agent_std.sh`
+
+## Gate de qualidade (padrão)
+- Lint: usar `biome check` (nao usar `pnpm lint`).
+- Incluir `knip` no check para detectar dependencias, exports e arquivos nao utilizados.
+- Exemplo de script `check`:
+  `biome check && pnpm exec tsc -p tsconfig.json --noEmit && pnpm test && pnpm dlx knip --no-progress`
+
+## Slash commands do Codex
+- Fonte canonica unica: `commands/*.md` (ou subpastas de `commands/`).
+- Publicacao global: `./script/sync-codex-prompts.sh`
+- Com limpeza (padrao): remove arquivos fora da fonte canonica e duplicatas comuns (`arquivo 1.md`, `arquivo-2.md`, `arquivo.md.1`) em `~/.codex/prompts`.
+- Dry-run: `./script/sync-codex-prompts.sh --dry-run`
+- Destino customizado: `./script/sync-codex-prompts.sh --target /caminho/prompts`
