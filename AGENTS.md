@@ -26,12 +26,12 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 
 ## Flow & Runtime
 - Use repo's package manager/runtime; no swaps w/o approval.
-- Dev server: prefer `portless`; if missing, install global `npm install -g portless`; do not add dependency to project; long-running server => `tmux` + `portless`; inside session prefer `portless run <comando>` (ex.: `portless run pnpm dev`); use explicit name only when stable shared URL needed (ex.: `portless api.myapp pnpm dev`); expected URL `http://<nome>.localhost:1355`; `portless` injects `PORT`, `HOST=127.0.0.1`, `PORTLESS_URL`; after start, always report `tmux attach -t <sessao>` + final URL.
+- Dev server: prefer `portless`; if missing, install global `npm install -g portless`; do not add dependency to project; do not say "subir o portless"; correct: subir o servidor do projeto usando `portless`, com URL no nome do projeto; sempre passar o nome do projeto explicitamente no comando; não confiar no nome inferido; long-running server => `tmux` + `portless`; inside session prefer `portless <nome-do-projeto> <comando>` (ex.: projeto `api.myapp` -> `portless api.myapp pnpm dev` -> `http://api.myapp.localhost:1355`); `portless` injects `PORT`, `HOST=127.0.0.1`, `PORTLESS_URL`; after start, always report `tmux attach -t <sessao>` + final URL.
 - Use Codex background for long jobs.
 - Servers via `tmux` (sessão sobrevive a crash): criar sessão (sem server) -> `send-keys` (start) -> informar `tmux attach -t <sessao>`. Ex:
 ```bash
 s="$(basename "$PWD")"; tmux has -t "$s" 2>/dev/null || tmux new -d -s "$s" -c "$PWD"
-tmux send -t "$s" "cd '$PWD' && portless run pnpm dev" C-m; tmux attach -t "$s"
+tmux send -t "$s" "cd '$PWD' && portless <nome-do-projeto> pnpm dev" C-m; tmux attach -t "$s"
 ```
 
 ## Build / Test
