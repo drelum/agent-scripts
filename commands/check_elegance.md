@@ -9,7 +9,7 @@ Analise o código/contexto informado em `$ARGUMENTS` com foco em clareza, consis
 Escopo:
 - Se `$ARGUMENTS` vier preenchido: use estritamente esse escopo.
 - Se `$ARGUMENTS` vier vazio ou só com espaços: revise o repositório inteiro (todos os arquivos do projeto relevantes para arquitetura, testes e manutenção).
-- Dentro do escopo escolhido, priorize primeiro os trechos/arquivos modificados recentemente.
+- Dentro do escopo escolhido, considere primeiro os trechos/arquivos modificados recentemente, mas sempre compare com a estrutura existente e com arquivos pré-existentes relacionados do projeto para encontrar duplicação, drift e oportunidades de consolidação.
 
 Objetivo:
 - Verificar elegância do código (clareza, coesão, legibilidade, simplicidade).

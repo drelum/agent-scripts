@@ -4,6 +4,7 @@ argument-hint: "[opcional: arquivo/pasta/diff; vazio = repo inteiro]"
 ---
 
 Analise `$ARGUMENTS` (ou o repo inteiro, se vazio) para encontrar código potencialmente não utilizado.
+Considere primeiro os trechos/arquivos modificados recentemente, mas sempre compare com a estrutura existente e com arquivos pré-existentes relacionados do projeto para confirmar se algo está realmente sem uso, duplicado ou apenas deslocado.
 
 Objetivo:
 - Identificar código morto/não referenciado.
