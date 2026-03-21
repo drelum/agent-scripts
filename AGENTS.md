@@ -37,6 +37,7 @@ tmux send -t "$s" "cd '$PWD' && portless <nome-do-projeto> pnpm dev" C-m; tmux a
 ## Build / Test
 - Before handoff: full gate (biome check/typecheck/tests/knip).
 - Lint == `biome check` only (no `pnpm lint`).
+- Testes visuais: Playwright only; sessão própria/isolada por execução; nunca dividir sessão com outro processo.
 - Dependency/unused check: use `knip` to find unused dependencies, exports and files.
 - Suggested `check` script:
   `biome check && pnpm exec tsc -p tsconfig.json --noEmit && pnpm test && pnpm dlx knip --no-progress`
@@ -57,6 +58,7 @@ tmux send -t "$s" "cd '$PWD' && portless <nome-do-projeto> pnpm dev" C-m; tmux a
 ## Language/Stack Notes
 - Idioma: pt-BR em comentários e interface (UI); código/variáveis podem ser em inglês; atenção máxima à acentuação correta.
 - TypeScript: preferred
+- Comparações/flags/status: evitar strings soltas; preferir enum ou equivalente tipado centralizado.
 - Biome lint
 - Knip for unused code/dependencies
 
