@@ -8,6 +8,7 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Workspace: `~/Projects`.
 - 3rd-party/OSS clone under `~/Projects/oss`.
 - Scope/files: repo or `~/Projects/agent-scripts` only.
+- Screenshot: quando eu pedir para consultar o screenshot, buscar o arquivo mais recente em `/mnt/c/Users/drelu/Downloads` cujo nome comece com `Screenshot_`; no WSL, tratar `C:\Users\drelu\Downloads` como `/mnt/c/Users/drelu/Downloads`; se não encontrar, avisar claramente.
 - "Make a note" => edit `AGENTS.md` (shortcut; not a blocker). Ignore `CLAUDE.md`.
 - Bugs: add regression test when it fits.
 - Keep files <~500 LOC; split/refactor as needed.
@@ -15,6 +16,7 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Prefer end-to-end verify; blocked => say what's missing.
 - New deps: quick health check (recent releases/commits, adoption).
 - Web: search early; quote exact errors; prefer 2024-2025 sources.
+- Edição manual: sempre usar `apply_patch` via shell (`exec_command`), com patch em heredoc ou arquivo temporário; não usar a tool `apply_patch` direta neste ambiente.
 - tmux: somente jobs longos (servers, watch, builds pesados). Session = nome da pasta do projeto.
 - tmux: nao usar para tsc, biome check, lint, tests.
 
@@ -22,7 +24,7 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Follow links until domain makes sense; honor `Read when` hints.
 - Keep notes short; update docs on behavior/API changes (no ship w/o docs).
 - Add `read_when` hints on cross-cutting docs.
-- Models: latest only. OK: Anthropic Opus 4.5 / Sonnet 4.5 (Sonnet 3.5 = old; avoid), OpenAI GPT-5.2, xAI Grok-4.1 Fast, Google Gemini 3 Flash.
+- Models: latest only. OK: Anthropic Opus 4.6 / Sonnet 4.5 (Sonnet 3.5 = old; avoid), OpenAI GPT-5.4, Google Gemini 3 Flash.
 
 ## Flow & Runtime
 - Use repo's package manager/runtime; no swaps w/o approval.
@@ -58,18 +60,13 @@ tmux send -t "$s" "cd '$PWD' && portless <nome-do-projeto> pnpm dev" C-m; tmux a
 ## Language/Stack Notes
 - Idioma: pt-BR em comentários e interface (UI); código/variáveis podem ser em inglês; atenção máxima à acentuação correta.
 - TypeScript: preferred
-- Comparações/flags/status: evitar strings soltas; preferir enum ou equivalente tipado centralizado.
+- Valores de controle de fluxo (comparações, flags, status, providers, domains, mode switches): evitar strings soltas; preferir enum, union tipada ou mapa tipado centralizado.
 - Biome lint
 - Knip for unused code/dependencies
 
-## Linear CLI
-Default esperado (máquina do Andre): `~/.config/linear/linear.toml` com `team_id = "ANDRE"` e `issue_sort = "priority"` (override: `--team` / `--sort`).
-Criar: `linear issue create --assignee self --team ANDRE -t "Bug: ..." -d "..."` | Listar: `linear issue list -A --all-states --team ANDRE --sort priority` | Atualizar: `linear issue update ANDRE-123`
-Buscar texto: `linear issue list -A --all-states --team ANDRE --sort priority --no-pager | rg -i "termo"`
-Ajuda: `linear --help` | `linear issue --help` | `linear auth --help`
-
 ## Critical Thinking
 - Fix root cause (not band-aid).
+- Evitar overengineering: preferir arquitetura elegante, componentizável e resistente a drift, projetada para necessidades reais atuais; não introduzir campos, granularidade, configurações ou abstrações extras para cenários hipotéticos se isso reduzir clareza ou aumentar ambiguidade.
 - Unsure: read more code; still stuck => ask w/ short options.
 - Conflicts: call out; pick safer path.
 - fallback: only implement if explicitly requested; when in doubt, ask before implementing.
