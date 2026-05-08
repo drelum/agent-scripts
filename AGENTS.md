@@ -26,6 +26,13 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Add `read_when` hints on cross-cutting docs.
 - Models: latest only. OK: Anthropic Opus 4.6 / Sonnet 4.5 (Sonnet 3.5 = old; avoid), OpenAI GPT-5.4, Google Gemini 3 Flash.
 
+## Google Workspace / GWS
+- CLI local: `gws`.
+- Wrappers canônicos em `~/Projects/agent-scripts/bin`.
+- Aitrus: `gws-aitrus`, usuário esperado `andre@aitrus.com.br`.
+- Pessoal: `gws-pessoal`, usuário esperado `drelum@gmail.com`.
+- Quando a conta importar, usar o wrapper explícito antes de ler Drive/Gmail/Docs/Sheets/Slides.
+
 ## Flow & Runtime
 - Use repo's package manager/runtime; no swaps w/o approval.
 - Dev server: prefer `portless`; if missing, install global `npm install -g portless`; do not add dependency to project; do not say "subir o portless"; correct: subir o servidor do projeto usando `portless`, com URL no nome do projeto; sempre passar o nome do projeto explicitamente no comando; não confiar no nome inferido; long-running server => `tmux` + `portless`; inside session prefer `portless <nome-do-projeto> <comando>` (ex.: projeto `api.myapp` -> `portless api.myapp pnpm dev` -> `http://api.myapp.localhost:1355`); `portless` injects `PORT`, `HOST=127.0.0.1`, `PORTLESS_URL`; after start, always report `tmux attach -t <sessao>` + final URL.
@@ -60,6 +67,7 @@ tmux send -t "$s" "cd '$PWD' && portless <nome-do-projeto> pnpm dev" C-m; tmux a
 ## Language/Stack Notes
 - Idioma: pt-BR em comentários e interface (UI); código/variáveis podem ser em inglês; atenção máxima à acentuação correta.
 - TypeScript: preferred
+- Banco de dados relacional: preferir tipos nativos e semânticos para cada coluna; não armazenar como texto o que o banco pode representar corretamente como timestamp, número, boolean, data ou identificador. Para domínios pequenos e estáveis, usar enum no banco e enum/union tipada na aplicação, preservando o mesmo conjunto de valores. Primary keys e foreign keys devem ser fortes, compatíveis entre si e escolhidas com foco em integridade, clareza e performance.
 - Valores de controle de fluxo (comparações, flags, status, providers, domains, mode switches): evitar strings soltas; preferir enum, union tipada ou mapa tipado centralizado.
 - Biome lint
 - Knip for unused code/dependencies
