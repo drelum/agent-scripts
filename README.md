@@ -10,7 +10,6 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 ## AGENTS no formato ponteiro
 - O texto de guardrail compartilhado agora vive apenas neste repo: `AGENTS.MD` (regras compartilhadas + lista de ferramentas).
 - O `AGENTS.MD` de cada repo consumidor fica reduzido a linha: `READ: ~/.codex/AGENTS.md` (regras especificas do repo so depois dessa linha, se realmente necessario).
-- `CLAUDE.md` (se existir ou nao) deve ser symlink para o `AGENTS.md` do proprio repo.
 - Nao copie mais os blocos `[shared]` ou `<tools>` para outros repositorios. Em vez disso, mantenha este repo atualizado e faca os downstream relerem o `AGENTS.MD` ao iniciar o trabalho.
 - Ao atualizar as instrucoes compartilhadas, edite `agent-scripts/AGENTS.MD`, replique a mudanca em `~/.codex/AGENTS.md` e deixe os repos downstream continuarem referenciando o ponteiro.
 - Padronizacao (global + projetos em `~/Projects`): `./script/ensure_agent_std.sh`
@@ -21,9 +20,26 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 - Exemplo de script `check`:
   `biome check && pnpm exec tsc -p tsconfig.json --noEmit && pnpm test && pnpm dlx knip --no-progress`
 
-## Slash commands do Codex
-- Fonte canonica unica: `commands/*.md` (ou subpastas de `commands/`).
-- Publicacao global: `./script/sync-codex-prompts.sh`
-- Com limpeza (padrao): remove arquivos fora da fonte canonica e duplicatas comuns (`arquivo 1.md`, `arquivo-2.md`, `arquivo.md.1`) em `~/.codex/prompts`.
-- Dry-run: `./script/sync-codex-prompts.sh --dry-run`
-- Destino customizado: `./script/sync-codex-prompts.sh --target /caminho/prompts`
+## Google Workspace / GWS
+- CLI base: `gws`.
+- Wrappers por conta:
+  - `./bin/gws-aitrus`: usa `~/.config/gws-aitrus`; conta esperada `andre@aitrus.com.br`.
+  - `./bin/gws-pessoal`: usa `~/.config/gws-pessoal`; conta esperada `drelum@gmail.com`.
+- Use sempre o wrapper explicito quando a conta importar. Evite chamar `gws` diretamente para Drive/Gmail/Docs/Sheets/Slides.
+- Login com escopos completos:
+  `./bin/gws-pessoal auth login --services drive,docs,sheets,slides,gmail`
+- Verificacao rapida da conta:
+  `./bin/gws-pessoal auth status`
+- Se a conta pessoal falhar com permissao do projeto Google, confirmar que `drelum@gmail.com` esta como OAuth test user e com IAM `Service Usage Consumer` no projeto OAuth.
+
+## Skills do Codex
+- Fonte canonica unica: `skills/*/SKILL.md`.
+- Publicacao global: `./script/sync-codex-skills.sh`
+- Destino padrao: `~/.agents/skills`, que o Codex CLI atual descobre automaticamente; reinicie o Codex se uma skill nova nao aparecer.
+- Dry-run: `./script/sync-codex-skills.sh --dry-run`
+- Destino customizado: `./script/sync-codex-skills.sh --target /caminho/skills`
+
+## Slash commands legados
+- Fonte legada: `commands/*.md`.
+- Publicacao legada: `./script/sync-codex-prompts.sh`
+- O Codex CLI 0.117+ nao lista mais `~/.codex/prompts` no menu `/`; use skills com `$` ou pelo menu de skills.

@@ -33,6 +33,13 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Pessoal: `gws-pessoal`, usuário esperado `drelum@gmail.com`.
 - Quando a conta importar, usar o wrapper explícito antes de ler Drive/Gmail/Docs/Sheets/Slides.
 
+## WhatsApp / wacli
+- CLI local: `wacli`.
+- Status de sync: usar sempre `wacli doctor --read-only --json`; fonte de verdade = `data.store.last_sync_at`.
+- Defasagem máxima aceita: 30 minutos; se `last_sync_at` faltar, não avançar após sync, ou estiver >30 min atrás de agora, tratar como stale e sincronizar quando eu pedir mensagens atuais.
+- Não concluir "sem mensagens novas" só por `Messages stored: 0`, principalmente com warnings de app state, `LTHash`, websocket, old counter, keys/session.
+- Após `wacli sync --once`, validar com `wacli doctor --read-only --json` e, quando útil, `wacli messages list --read-only --json --limit 1`.
+
 ## Flow & Runtime
 - Use repo's package manager/runtime; no swaps w/o approval.
 - Dev server: prefer `portless`; if missing, install global `npm install -g portless`; do not add dependency to project; do not say "subir o portless"; correct: subir o servidor do projeto usando `portless`, com URL no nome do projeto; sempre passar o nome do projeto explicitamente no comando; não confiar no nome inferido; long-running server => `tmux` + `portless`; inside session prefer `portless <nome-do-projeto> <comando>` (ex.: projeto `api.myapp` -> `portless api.myapp pnpm dev` -> `http://api.myapp.localhost:1355`); `portless` injects `PORT`, `HOST=127.0.0.1`, `PORTLESS_URL`; after start, always report `tmux attach -t <sessao>` + final URL.
