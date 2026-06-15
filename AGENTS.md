@@ -8,6 +8,7 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Workspace: `~/Projects`.
 - 3rd-party/OSS clone under `~/Projects/oss`.
 - Scope/files: repo or `~/Projects/agent-scripts` only.
+- Datas/horários: sempre reportar em formato brasileiro e localidade São Paulo, Brasil; converter de GMT/UTC quando necessário.
 - Screenshot: quando eu pedir para consultar o screenshot, buscar o arquivo mais recente em `/mnt/c/Users/drelu/Downloads` cujo nome comece com `Screenshot_`; no WSL, tratar `C:\Users\drelu\Downloads` como `/mnt/c/Users/drelu/Downloads`; se não encontrar, avisar claramente.
 - "Make a note" => edit `AGENTS.md` (shortcut; not a blocker). Ignore `CLAUDE.md`.
 - Bugs: add regression test when it fits.
@@ -29,8 +30,7 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 ## Google Workspace / GWS
 - CLI local: `gws`.
 - Wrappers canônicos em `~/Projects/agent-scripts/bin`.
-- Aitrus: `gws-aitrus`, usuário esperado `andre@aitrus.com.br`.
-- Pessoal: `gws-pessoal`, usuário esperado `drelum@gmail.com`.
+- Aitrus: `gws`, usuário esperado `andre@aitrus.com.br`.
 - Quando a conta importar, usar o wrapper explícito antes de ler Drive/Gmail/Docs/Sheets/Slides.
 
 ## WhatsApp / wacli
@@ -42,7 +42,7 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 
 ## Flow & Runtime
 - Use repo's package manager/runtime; no swaps w/o approval.
-- Dev server: prefer `portless`; if missing, install global `npm install -g portless`; do not add dependency to project; do not say "subir o portless"; correct: subir o servidor do projeto usando `portless`, com URL no nome do projeto; sempre passar o nome do projeto explicitamente no comando; não confiar no nome inferido; long-running server => `tmux` + `portless`; inside session prefer `portless <nome-do-projeto> <comando>` (ex.: projeto `api.myapp` -> `portless api.myapp pnpm dev` -> `http://api.myapp.localhost:1355`); `portless` injects `PORT`, `HOST=127.0.0.1`, `PORTLESS_URL`; after start, always report `tmux attach -t <sessao>` + final URL.
+- Dev server: prefer `portless` (requires Node.js 24+); if missing, install global `npm install -g portless`; do not add dependency to project; do not say "subir o portless"; correct: subir o servidor do projeto usando `portless`, com URL no nome do projeto; para servidor iniciado por agente, passar nome explícito; `portless` sem args só quando `portless.json`/`package.json` definir nome/script e a URL inferida for clara; long-running server => `tmux` + `portless`; inside session prefer `portless <nome-do-projeto> <comando>` (ex.: projeto `api.myapp` -> `portless api.myapp pnpm dev` -> `https://api.myapp.localhost`); reportar a URL final exibida pelo `portless`; `portless` injects `PORT`, `HOST=127.0.0.1`, `PORTLESS_URL`, `NODE_EXTRA_CA_CERTS` quando HTTPS ativo; after start, always report `tmux attach -t <sessao>` + final URL.
 - Use Codex background for long jobs.
 - Servers via `tmux` (sessão sobrevive a crash): criar sessão (sem server) -> `send-keys` (start) -> informar `tmux attach -t <sessao>`. Ex:
 ```bash
