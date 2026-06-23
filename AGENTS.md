@@ -17,7 +17,6 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Prefer end-to-end verify; blocked => say what's missing.
 - New deps: quick health check (recent releases/commits, adoption).
 - Web: search early; quote exact errors; prefer 2024-2025 sources.
-- Edição manual: sempre usar `apply_patch` via shell (`exec_command`), com patch em heredoc ou arquivo temporário; não usar a tool `apply_patch` direta neste ambiente.
 - tmux: somente jobs longos (servers, watch, builds pesados). Session = nome da pasta do projeto.
 - tmux: nao usar para tsc, biome check, lint, tests.
 
@@ -30,7 +29,9 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 ## Google Workspace / GWS
 - CLI local: `gws`.
 - Wrappers canônicos em `~/Projects/agent-scripts/bin`.
-- Aitrus: `gws`, usuário esperado `andre@aitrus.com.br`.
+- Aitrus: de `~/Projects`, usar `./agent-scripts/bin/gws-aitrus`; usuário esperado `andre@aitrus.com.br`.
+- Pessoal: de `~/Projects`, usar `./agent-scripts/bin/gws-pessoal`; usuário esperado `drelum@gmail.com`.
+- Fora de `~/Projects`, usar `~/Projects/agent-scripts/bin/gws-aitrus` ou `~/Projects/agent-scripts/bin/gws-pessoal`.
 - Quando a conta importar, usar o wrapper explícito antes de ler Drive/Gmail/Docs/Sheets/Slides.
 
 ## WhatsApp / wacli

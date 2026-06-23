@@ -28,8 +28,6 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 - Use sempre o wrapper explicito quando a conta importar. Evite chamar `gws` diretamente para Drive/Gmail/Docs/Sheets/Slides.
 - Login com escopos completos:
   `./bin/gws-pessoal auth login --services drive,docs,sheets,slides,gmail`
-- Verificacao rapida da conta:
-  `./bin/gws-pessoal auth status`
 - Se a conta pessoal falhar com permissao do projeto Google, confirmar que `drelum@gmail.com` esta como OAuth test user e com IAM `Service Usage Consumer` no projeto OAuth.
 
 ## Skills do Codex
