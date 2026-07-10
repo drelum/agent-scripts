@@ -84,6 +84,28 @@ class RepositoryCase(unittest.TestCase):
         with self.assertRaisesRegex(BundleError, "secret-like content"):
             build_bundle(self.repo, "local", None, "HEAD", 100_000)
 
+    def test_generic_token_and_bearer_values_fail_closed(self) -> None:
+        generic = "abcdefghijklmnopqrstuvwxyz" + "123456"
+        bearer = "header.payload." + "abcdefghijklmnopqrstuvwxyz123456"
+        (self.repo / "app.txt").write_text(
+            f'token="{generic}"\nAuthorization: Bearer {bearer}\n', encoding="utf-8"
+        )
+        with self.assertRaisesRegex(BundleError, "secret-like content"):
+            build_bundle(self.repo, "local", None, "HEAD", 100_000)
+
+    def test_merge_commit_requires_an_explicit_comparison(self) -> None:
+        self.git("checkout", "-qb", "feature")
+        (self.repo / "feature.txt").write_text("feature\n", encoding="utf-8")
+        self.git("add", "feature.txt")
+        self.git("commit", "-qm", "feature")
+        self.git("checkout", "-q", "-")
+        (self.repo / "main.txt").write_text("main\n", encoding="utf-8")
+        self.git("add", "main.txt")
+        self.git("commit", "-qm", "main")
+        self.git("merge", "--no-ff", "feature", "-qm", "merge")
+        with self.assertRaisesRegex(BundleError, "merge commits require"):
+            build_bundle(self.repo, "commit", None, "HEAD", 100_000)
+
     def test_oversized_bundle_fails_closed(self) -> None:
         (self.repo / "app.txt").write_text("x" * 10_000, encoding="utf-8")
         with self.assertRaisesRegex(BundleError, "exceeds limit"):
