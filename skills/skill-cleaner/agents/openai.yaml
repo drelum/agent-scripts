@@ -1,0 +1,4 @@
+interface:
+  display_name: "Skill Cleaner"
+  short_description: "Audit skill budget, usage, and duplicates"
+  default_prompt: "Use $skill-cleaner to audit loaded Codex skills, recent usage, duplicate copies, prompt budget, and compact description candidates."

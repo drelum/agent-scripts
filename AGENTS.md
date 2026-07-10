@@ -12,11 +12,10 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Screenshot: quando eu pedir para consultar o screenshot, buscar o arquivo mais recente em `/mnt/c/Users/drelu/Downloads` cujo nome comece com `Screenshot_`; no WSL, tratar `C:\Users\drelu\Downloads` como `/mnt/c/Users/drelu/Downloads`; se não encontrar, avisar claramente.
 - "Make a note" => edit `AGENTS.md` (shortcut; not a blocker). Ignore `CLAUDE.md`.
 - Bugs: add regression test when it fits.
-- Keep files <~500 LOC; split/refactor as needed.
 - Commits: Conventional Commits (`feat|fix|refactor|build|ci|chore|docs|style|perf|test`).
 - Prefer end-to-end verify; blocked => say what's missing.
 - New deps: quick health check (recent releases/commits, adoption).
-- Web: search early; quote exact errors; prefer 2024-2025 sources.
+- Web: search early; quote exact errors; prefer current primary sources; compare publication date with event/version date.
 - tmux: somente jobs longos (servers, watch, builds pesados). Session = nome da pasta do projeto.
 - tmux: nao usar para tsc, biome check, lint, tests.
 
@@ -24,7 +23,7 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Follow links until domain makes sense; honor `Read when` hints.
 - Keep notes short; update docs on behavior/API changes (no ship w/o docs).
 - Add `read_when` hints on cross-cutting docs.
-- Models: latest only. OK: Anthropic Opus 4.6 / Sonnet 4.5 (Sonnet 3.5 = old; avoid), OpenAI GPT-5.4, Google Gemini 3 Flash.
+- Models: latest/current only; verify availability in the active CLI/provider before selecting or pinning; avoid static allowlists that drift.
 
 ## Google Workspace / GWS
 - CLI local: `gws`.
@@ -44,7 +43,6 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 ## Flow & Runtime
 - Use repo's package manager/runtime; no swaps w/o approval.
 - Dev server: prefer `portless` (requires Node.js 24+); if missing, install global `npm install -g portless`; do not add dependency to project; do not say "subir o portless"; correct: subir o servidor do projeto usando `portless`, com URL no nome do projeto; para servidor iniciado por agente, passar nome explícito; `portless` sem args só quando `portless.json`/`package.json` definir nome/script e a URL inferida for clara; long-running server => `tmux` + `portless`; inside session prefer `portless <nome-do-projeto> <comando>` (ex.: projeto `api.myapp` -> `portless api.myapp pnpm dev` -> `https://api.myapp.localhost`); reportar a URL final exibida pelo `portless`; `portless` injects `PORT`, `HOST=127.0.0.1`, `PORTLESS_URL`, `NODE_EXTRA_CA_CERTS` quando HTTPS ativo; after start, always report `tmux attach -t <sessao>` + final URL.
-- Use Codex background for long jobs.
 - Servers via `tmux` (sessão sobrevive a crash): criar sessão (sem server) -> `send-keys` (start) -> informar `tmux attach -t <sessao>`. Ex:
 ```bash
 s="$(basename "$PWD")"; tmux has -t "$s" 2>/dev/null || tmux new -d -s "$s" -c "$PWD"
@@ -53,8 +51,12 @@ tmux send -t "$s" "cd '$PWD' && portless <nome-do-projeto> pnpm dev" C-m; tmux a
 
 ## Build / Test
 - Before handoff: full gate (biome check/typecheck/tests/knip).
+- Mudança não trivial de código: usar `autoreview` antes do handoff; dispensar em docs-only, mudança trivial, revisão independente equivalente ou quando eu optar por não executar.
+- Auto Review: congelar o escopo original; no máximo 2 ciclos de correção. Sem convergência, parar e classificar o restante em bloqueador do escopo, follow-up ou decisão necessária; não ampliar arquivos/LOC em mais de 2x sem aprovação.
+- Mudança de comportamento observável: usar `behavior-validator` após a implementação e os testes, validando por superfícies públicas sem ler o código-fonte.
+- Quando ambos se aplicarem: `autoreview` primeiro; `behavior-validator` depois. Não executar painel ou múltiplos engines sem solicitação.
 - Lint == `biome check` only (no `pnpm lint`).
-- Testes visuais: Playwright only; sessão própria/isolada por execução; nunca dividir sessão com outro processo.
+- Testes visuais e browser QA: usar `agent-browser`; sessão própria/isolada por execução; nunca dividir sessão com outro processo.
 - Dependency/unused check: use `knip` to find unused dependencies, exports and files.
 - Suggested `check` script:
   `biome check && pnpm exec tsc -p tsconfig.json --noEmit && pnpm test && pnpm dlx knip --no-progress`

@@ -1,0 +1,74 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "yaml"
+
+repo_root = File.expand_path("..", __dir__)
+Dir.chdir(repo_root)
+
+def load_front_matter(text)
+  match = text.match(/\A---\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\z)/m)
+  return [nil, "front matter deve começar na primeira linha e terminar com ---"] unless match
+
+  yaml_text = match[1]
+  data = YAML.safe_load(
+    yaml_text,
+    permitted_classes: [],
+    permitted_symbols: [],
+    aliases: false,
+  )
+
+  return [nil, "front matter deve ser um mapa YAML"] unless data.is_a?(Hash)
+
+  [data, nil]
+rescue Psych::SyntaxError => e
+  [nil, "YAML inválido: #{e.problem}, linha #{e.line}, coluna #{e.column}"]
+rescue StandardError => e
+  [nil, "YAML inválido: #{e.message}"]
+end
+
+skill_files = Dir.glob("skills/*/SKILL.md").sort
+errors = []
+names = {}
+
+skill_files.each do |path|
+  text = File.read(path, encoding: "UTF-8")
+  data, error = load_front_matter(text)
+
+  if error
+    errors << [path, error]
+    next
+  end
+
+  %w[name description].each do |field|
+    value = data[field]
+    next if value.is_a?(String) && !value.strip.empty?
+
+    errors << [path, "campo obrigatório ausente ou vazio: #{field}"]
+  end
+
+  name = data["name"]
+  next unless name.is_a?(String) && !name.strip.empty?
+
+  normalized_name = name.strip
+  if names.key?(normalized_name)
+    errors << [path, "nome duplicado #{normalized_name.inspect}; também usado por #{names[normalized_name]}"]
+  else
+    names[normalized_name] = path
+  end
+end
+
+if skill_files.empty?
+  warn "Nenhuma skill encontrada em skills/*/SKILL.md."
+  exit 0
+end
+
+if errors.any?
+  warn "Validação de skills falhou:"
+  errors.each do |path, error|
+    warn "- #{path}: #{error}"
+  end
+  exit 1
+end
+
+puts "Skills validadas: #{skill_files.length}."

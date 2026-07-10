@@ -9,10 +9,12 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 
 ## AGENTS no formato ponteiro
 - O texto de guardrail compartilhado agora vive apenas neste repo: `AGENTS.MD` (regras compartilhadas + lista de ferramentas).
-- O `AGENTS.MD` de cada repo consumidor fica reduzido a linha: `READ: ~/.codex/AGENTS.md` (regras especificas do repo so depois dessa linha, se realmente necessario).
+- O Codex recebe uma cópia idêntica em `~/.codex/AGENTS.md`; o Claude recebe links globais em `~/.claude/CLAUDE.md` e `~/.claude/AGENTS.md` apontando para a fonte canônica.
+- Os arquivos `AGENTS.md` e `CLAUDE.md` de cada repo consumidor começam com a linha `READ: ~/.codex/AGENTS.md` (regras específicas do repo só depois dessa linha, se realmente necessário).
 - Nao copie mais os blocos `[shared]` ou `<tools>` para outros repositorios. Em vez disso, mantenha este repo atualizado e faca os downstream relerem o `AGENTS.MD` ao iniciar o trabalho.
 - Ao atualizar as instrucoes compartilhadas, edite `agent-scripts/AGENTS.MD`, replique a mudanca em `~/.codex/AGENTS.md` e deixe os repos downstream continuarem referenciando o ponteiro.
-- Padronizacao (global + projetos em `~/Projects`): `./script/ensure_agent_std.sh`
+- Sincronização completa de Skills e diretivas: `./script/sync-agent-environment.sh`
+- Somente diretivas (global + projetos em `~/Projects`): `./script/ensure_agent_std.sh`
 
 ## Gate de qualidade (padrão)
 - Lint: usar `biome check` (nao usar `pnpm lint`).
@@ -32,12 +34,17 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 
 ## Skills do Codex
 - Fonte canonica unica: `skills/*/SKILL.md`.
-- Publicacao global: `./script/sync-codex-skills.sh`
-- Destino padrao: `~/.agents/skills`, que o Codex CLI atual descobre automaticamente; reinicie o Codex se uma skill nova nao aparecer.
+- Validação de front matter, campos obrigatórios e nomes duplicados: `./script/validate-skills`
+- Validação antes de cada commit: `git config core.hooksPath hooks`
+- Sincronização completa recomendada: `./script/sync-agent-environment.sh`
+- Somente publicação global para Codex e Claude: `./script/sync-codex-skills.sh`
+- O script cria links simbólicos individuais para a fonte canônica; não copia skills e não substitui diretórios reais ou links estrangeiros.
+- Destinos padrão: `~/.agents/skills` para Codex e `~/.claude/skills` para Claude.
 - Dry-run: `./script/sync-codex-skills.sh --dry-run`
-- Destino customizado: `./script/sync-codex-skills.sh --target /caminho/skills`
+- Destinos customizados: `--codex-target /caminho` e `--claude-target /caminho`.
+- Substituição explícita de diretórios reais com nomes canônicos: `./script/sync-codex-skills.sh --replace-existing`.
 
-## Slash commands legados
-- Fonte legada: `commands/*.md`.
-- Publicacao legada: `./script/sync-codex-prompts.sh`
-- O Codex CLI 0.117+ nao lista mais `~/.codex/prompts` no menu `/`; use skills com `$` ou pelo menu de skills.
+### Skills canônicas
+- `autoreview`: revisão source-aware isolada e estruturada com Codex ou Claude; Codex usa `gpt-5.6-sol` com reasoning `high` por padrão; suporta mudanças locais, branch e commit.
+- `behavior-validator`: validação source-blind de comportamento observável; aplicações web e Electron usam `agent-browser` em sessão isolada.
+- `skill-cleaner`: auditoria de inventário, orçamento de contexto, uso recente, duplicações e descrições; `--no-logs` desativa a leitura de histórico.

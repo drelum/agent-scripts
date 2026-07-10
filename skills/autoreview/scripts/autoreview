@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from autoreview_lib.bundle import BundleError, build_bundle
+from autoreview_lib.engines import EngineError, command_preview, review_prompt, run_engine
+from autoreview_lib.report import ReportError, extract_report
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Isolated structured review with Codex or Claude.")
+    parser.add_argument("--engine", choices=["codex", "claude"], default="codex")
+    parser.add_argument("--mode", choices=["auto", "local", "branch", "commit"], default="auto")
+    parser.add_argument("--base")
+    parser.add_argument("--commit", default="HEAD")
+    parser.add_argument(
+        "--model",
+        help="Optional engine model override; Codex defaults to gpt-5.6-sol, Claude to its CLI default.",
+    )
+    parser.add_argument("--repo", type=Path, default=Path.cwd())
+    parser.add_argument("--max-bundle-kb", type=int, default=1024)
+    parser.add_argument("--dry-run", action="store_true", help="Build and screen the bundle without invoking a model.")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    repo = args.repo.resolve()
+    try:
+        bundle = build_bundle(
+            repo=repo,
+            mode=args.mode,
+            base=args.base,
+            commit=args.commit,
+            max_bundle_bytes=args.max_bundle_kb * 1024,
+        )
+        if args.dry_run:
+            print(json.dumps({
+                "target": bundle.label,
+                "bundle_bytes": len(bundle.content.encode("utf-8")),
+                **command_preview(args.engine, repo, args.model),
+            }, indent=2))
+            return 0
+        raw = run_engine(args.engine, repo, review_prompt(bundle.label, bundle.content), args.model)
+        report = extract_report(raw)
+        print(json.dumps({"engine": args.engine, "target": bundle.label, **report}, indent=2))
+        findings = report["findings"]
+        if findings:
+            print(f"autoreview: {len(findings)} actionable finding(s)", file=sys.stderr)
+            return 1
+        print("autoreview clean: no actionable findings reported", file=sys.stderr)
+        return 0
+    except (BundleError, EngineError, ReportError, UnicodeDecodeError) as error:
+        print(f"autoreview: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

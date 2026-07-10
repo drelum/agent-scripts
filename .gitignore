@@ -1,0 +1,4 @@
+/secrets/
+/.state/
+__pycache__/
+*.py[cod]

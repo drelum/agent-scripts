@@ -1,0 +1,1 @@
+READ: ~/.codex/AGENTS.md
