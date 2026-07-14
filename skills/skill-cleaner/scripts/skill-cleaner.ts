@@ -665,9 +665,13 @@ export function usageEvidence(record: Record<string, unknown>): {
   userText?: string;
 } {
   const payload = record.payload as Record<string, unknown> | undefined;
-  if (record.type === "response_item" && payload?.type === "function_call") {
+  if (
+    record.type === "response_item" &&
+    (payload?.type === "function_call" || payload?.type === "custom_tool_call")
+  ) {
+    const field = payload.type === "custom_tool_call" ? payload.input : payload.arguments;
     return {
-      callArgs: typeof payload.arguments === "string" ? payload.arguments : "",
+      callArgs: typeof field === "string" ? field : "",
     };
   }
   if (
@@ -701,13 +705,22 @@ function collectWorkingDirectories(value: unknown): string[] {
   return [...current, ...Object.values(record).flatMap(collectWorkingDirectories)];
 }
 
+function textualWorkingDirectories(text: string): string[] {
+  return [...text.matchAll(
+    /(?:^|[,{]\s*)["']?(?:workdir|cwd)["']?\s*:\s*["'`]([^"'`]+)["'`]/g,
+  )].map((match) => match[1] ?? "").filter(Boolean);
+}
+
 export function referencedSkillPaths(callArgs: string): string[] {
   let parsed: unknown = callArgs;
   try {
     parsed = JSON.parse(callArgs) as unknown;
   } catch {}
   const texts = typeof parsed === "string" ? [parsed] : messageText(parsed);
-  const workdirs = collectWorkingDirectories(parsed).map(expandHome);
+  const workdirs = [
+    ...collectWorkingDirectories(parsed),
+    ...texts.flatMap(textualWorkingDirectories),
+  ].map(expandHome);
   const paths = new Set<string>();
   for (const text of texts) {
     for (const match of text.matchAll(/(?:^|[\s"'`=])((?:\/|\.{1,2}\/)?[^\s"'`]*\/SKILL\.md)\b/g)) {

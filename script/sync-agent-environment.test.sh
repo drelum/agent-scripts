@@ -26,11 +26,10 @@ output="$("$repo_root/script/sync-agent-environment.sh")"
 cmp -s "$repo_root/AGENTS.md" "$HOME/.codex/AGENTS.md"
 [[ "$(realpath "$HOME/.claude/CLAUDE.md")" == "$(realpath "$repo_root/AGENTS.md")" ]]
 [[ "$(realpath "$HOME/.claude/AGENTS.md")" == "$(realpath "$repo_root/AGENTS.md")" ]]
-for skill in autoreview behavior-validator skill-cleaner; do
+for skill in autoreview behavior-validator second-opinion skill-cleaner visual-inspection; do
   [[ "$(realpath "$HOME/.agents/skills/$skill")" == "$(realpath "$repo_root/skills/$skill")" ]]
   [[ "$(realpath "$HOME/.claude/skills/$skill")" == "$(realpath "$repo_root/skills/$skill")" ]]
 done
-
 [[ "$(head -n 1 "$project/AGENTS.md")" == 'READ: ~/.codex/AGENTS.md' ]]
 [[ "$(head -n 1 "$project/CLAUDE.md")" == 'READ: ~/.codex/AGENTS.md' ]]
 [[ -L "$linked_project/AGENTS.md" ]]

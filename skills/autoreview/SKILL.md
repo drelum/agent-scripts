@@ -32,7 +32,7 @@ Explicit targets:
 <skill-dir>/scripts/autoreview --mode commit --commit HEAD --engine codex
 ```
 
-2. Let the helper build a bounded review bundle. It must fail closed on sensitive paths, secret-like values, binary untracked files, or oversized input.
+2. Let the helper build a bounded review bundle. It must fail closed on sensitive paths, private keys, API keys, tokens, binary untracked files, or oversized input. Password assignments are not content-screened.
 3. Read the structured findings. Confirm each one by inspecting source, tests, and dependency contracts.
 4. Accept only concrete defects introduced or exposed by the reviewed change. Reject style-only, speculative, pre-existing, or overengineered findings.
 5. Fix accepted findings within the frozen task scope, rerun relevant tests, then rerun the same review engine.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Visual Inspection"
+  short_description: "Browser QA isolado com Agent Browser"
+  default_prompt: "Use $visual-inspection para validar visualmente esta aplicação com um worker Codex isolado."

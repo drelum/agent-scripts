@@ -53,10 +53,11 @@ tmux send -t "$s" "cd '$PWD' && portless <nome-do-projeto> pnpm dev" C-m; tmux a
 - Before handoff: full gate (biome check/typecheck/tests/knip).
 - Mudança não trivial de código: usar `autoreview` antes do handoff; dispensar em docs-only, mudança trivial, revisão independente equivalente ou quando eu optar por não executar.
 - Auto Review: congelar o escopo original; no máximo 2 ciclos de correção. Sem convergência, parar e classificar o restante em bloqueador do escopo, follow-up ou decisão necessária; não ampliar arquivos/LOC em mais de 2x sem aprovação.
+- Segunda opinião solicitada: usar `second-opinion --repo <repository>` para chamar um único Codex ou Claude com acesso amplo para investigação e retornar um laudo Markdown livre, coerente com o tema; acompanhar heartbeat e timeout interno do runner, sem envolver a execução em timeout externo; instruir explicitamente a não alterar arquivos ou estado e não implementar a recomendação sem pedido separado.
 - Mudança de comportamento observável: usar `behavior-validator` após a implementação e os testes, validando por superfícies públicas sem ler o código-fonte.
 - Quando ambos se aplicarem: `autoreview` primeiro; `behavior-validator` depois. Não executar painel ou múltiplos engines sem solicitação.
 - Lint == `biome check` only (no `pnpm lint`).
-- Testes visuais e browser QA: usar `agent-browser`; sessão própria/isolada por execução; nunca dividir sessão com outro processo.
+- Testes visuais e browser QA: usar a skill `visual-inspection`, que chama um worker Codex externo fixado em `gpt-5.6-sol` com reasoning `medium`; entregar ao worker um handoff completo do contexto relevante e acesso total ao repositório; o worker usa `agent-browser` em sessão própria/isolada, com heartbeat e timeout interno. Não executar browser QA no agente principal, envolver o runner em timeout externo nem fazer fallback silencioso.
 - Dependency/unused check: use `knip` to find unused dependencies, exports and files.
 - Suggested `check` script:
   `biome check && pnpm exec tsc -p tsconfig.json --noEmit && pnpm test && pnpm dlx knip --no-progress`

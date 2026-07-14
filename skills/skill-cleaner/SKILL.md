@@ -53,7 +53,7 @@ node --experimental-strip-types <skill-dir>/scripts/skill-cleaner.ts --root ~/.a
 - It realpath-dedupes roots, so symlinked skill roots do not create false duplicates.
 - For duplicate names, it reports description/body similarity and suggests deletion candidates only when bodies are near copies. Keep priority defaults to direct Codex system skills, then direct Codex skills, then plugin skills, then personal/repo copies.
 - It scans recent `~/.codex/history.jsonl` and session logs by default. Use `--no-logs` to disable history reads; use `--deep-logs` to include archived Codex sessions.
-- Usage evidence is heuristic: user `$skill`/`use skill` mentions and paths observed in tool-call arguments.
+- Usage evidence is heuristic: user `$skill`/`use skill` mentions and paths observed in standard or custom tool-call inputs.
 
 ## Output Policy
 

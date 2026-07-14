@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import shlex
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+from visual_inspection_lib.contract import (
+    REPORT_SCHEMA,
+    VisualInspectionError,
+    extract_report,
+    inspection_prompt,
+    validate_context,
+    validate_evidence,
+)
+from visual_inspection_lib.engine import (
+    CODEX_MODEL,
+    CODEX_REASONING_EFFORT,
+    DEFAULT_HEARTBEAT_SECONDS,
+    DEFAULT_TIMEOUT_SECONDS,
+    SAO_PAULO,
+    WorkerRun,
+    close_browser_session,
+    command_preview,
+    run_worker,
+)
+from visual_inspection_lib.runtime import (
+    create_run,
+    discover_preserved_artifacts,
+    resolve_repository,
+    validate_url,
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run full-context visual QA with a separate Codex Sol worker."
+    )
+    parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument("--url", required=True)
+    parser.add_argument("--output-root", type=Path)
+    parser.add_argument("--max-context-kb", type=int, default=1024)
+    parser.add_argument(
+        "--timeout-seconds",
+        type=positive_seconds,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        help="Maximum worker runtime before a blocked result (default: 900).",
+    )
+    parser.add_argument(
+        "--heartbeat-seconds",
+        type=positive_seconds,
+        default=DEFAULT_HEARTBEAT_SECONDS,
+        help="Progress heartbeat interval written to stderr (default: 30).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate inputs and show the fixed invocation without calling Codex.",
+    )
+    return parser.parse_args()
+
+
+def positive_seconds(value: str) -> float:
+    try:
+        seconds = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a number greater than zero") from error
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return seconds
+
+
+def progress(message: str) -> None:
+    print(f"visual-inspection {message}", file=sys.stderr, flush=True)
+
+
+def timeout_report(timeout_seconds: float, evidence_dir: Path) -> dict[str, object]:
+    limitation = (
+        f"Codex worker timed out after {timeout_seconds:g}s. "
+        f"Partial artifacts, if any, remain in {evidence_dir}."
+    )
+    return blocked_report(
+        "Visual inspection did not finish before the configured timeout.",
+        "Worker completion",
+        limitation,
+    )
+
+
+def blocked_report(
+    summary: str,
+    criterion: str,
+    limitation: str,
+) -> dict[str, object]:
+    return {
+        "status": "blocked",
+        "summary": summary,
+        "criteria": [
+            {
+                "criterion": criterion,
+                "status": "blocked",
+                "evidence": limitation,
+            }
+        ],
+        "findings": [],
+        "evidence_paths": [],
+        "limitations": [limitation],
+    }
+
+
+def main() -> int:
+    os.umask(0o077)
+    args = parse_args()
+    context = sys.stdin.read()
+    try:
+        validate_context(context, args.max_context_kb * 1024)
+        repository = resolve_repository(args.repo)
+        url = validate_url(args.url)
+        if args.dry_run:
+            print(
+                json.dumps(
+                    {
+                        "model": CODEX_MODEL,
+                        "reasoning_effort": CODEX_REASONING_EFFORT,
+                        "repository": str(repository),
+                        "url": url,
+                        "timeout_seconds": args.timeout_seconds,
+                        "heartbeat_seconds": args.heartbeat_seconds,
+                        "command": command_preview(repository),
+                    },
+                    indent=2,
+                )
+            )
+            return 0
+
+        session, evidence_dir = create_run(args.output_root)
+        progress(
+            f"run initialized; session={session}; evidence_dir={evidence_dir}; "
+            f"timeout={args.timeout_seconds:g}s"
+        )
+        events_log = evidence_dir / "worker-events.jsonl"
+        progress(f"follow raw events: tail -n 200 -f {shlex.quote(str(events_log))}")
+        fallback_started_at = datetime.now(SAO_PAULO)
+        fallback_started_monotonic = time.monotonic()
+        worker_error: str | None = None
+        cleanup_error: str | None = None
+        worker_run: WorkerRun | None = None
+        preserve_partial_artifacts = False
+        try:
+            worker_run = run_worker(
+                repository,
+                evidence_dir,
+                inspection_prompt(context, repository, url, session, evidence_dir),
+                REPORT_SCHEMA,
+                session,
+                timeout_seconds=args.timeout_seconds,
+                heartbeat_seconds=args.heartbeat_seconds,
+                progress=progress,
+            )
+        except VisualInspectionError as error:
+            worker_error = str(error)
+        except Exception:
+            worker_error = (
+                "Unexpected Codex worker failure; inspect the protected worker logs "
+                f"under {evidence_dir}"
+            )
+        finally:
+            progress("closing isolated browser session")
+            cleanup_error = close_browser_session(session, evidence_dir)
+        fallback_finished_at = datetime.now(SAO_PAULO)
+        fallback_duration_seconds = round(
+            time.monotonic() - fallback_started_monotonic,
+            3,
+        )
+        if worker_error:
+            preserve_partial_artifacts = True
+            report = blocked_report(
+                "Visual inspection worker failed before producing a valid report.",
+                "Worker execution",
+                worker_error,
+            )
+        elif worker_run is None:
+            preserve_partial_artifacts = True
+            report = blocked_report(
+                "Visual inspection worker did not return execution metadata.",
+                "Worker execution",
+                f"Missing worker result; inspect protected logs under {evidence_dir}",
+            )
+        else:
+            try:
+                if worker_run.timed_out:
+                    preserve_partial_artifacts = True
+                    report = timeout_report(args.timeout_seconds, evidence_dir)
+                elif worker_run.raw_report is None:
+                    raise VisualInspectionError("Codex worker returned an empty report")
+                else:
+                    report = extract_report(worker_run.raw_report)
+                validate_evidence(report, evidence_dir)
+            except VisualInspectionError as error:
+                preserve_partial_artifacts = True
+                report = blocked_report(
+                    "Visual inspection worker returned an invalid report or evidence set.",
+                    "Structured worker report",
+                    str(error),
+                )
+        if cleanup_error:
+            report["limitations"].append(cleanup_error)
+            report["criteria"].append(
+                {
+                    "criterion": "Browser session cleanup",
+                    "status": "blocked",
+                    "evidence": cleanup_error,
+                }
+            )
+            if report["status"] == "pass":
+                report["status"] = "blocked"
+                report["summary"] += " Browser session cleanup was not confirmed."
+        started_at = (
+            worker_run.started_at
+            if worker_run
+            else fallback_started_at.isoformat(timespec="seconds")
+        )
+        finished_at = (
+            worker_run.finished_at
+            if worker_run
+            else fallback_finished_at.isoformat(timespec="seconds")
+        )
+        duration_seconds = (
+            worker_run.duration_seconds if worker_run else fallback_duration_seconds
+        )
+        result = {
+            "model": CODEX_MODEL,
+            "reasoning_effort": CODEX_REASONING_EFFORT,
+            "repository": str(repository),
+            "url": url,
+            "session": session,
+            "evidence_dir": str(evidence_dir),
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "duration_seconds": duration_seconds,
+            "timeout_seconds": args.timeout_seconds,
+            "heartbeat_seconds": args.heartbeat_seconds,
+            "evidence_review_required": bool(report["evidence_paths"]),
+            "preserved_artifact_paths": (
+                discover_preserved_artifacts(evidence_dir)
+                if preserve_partial_artifacts
+                else []
+            ),
+            **report,
+        }
+        report_file = evidence_dir / "report.json"
+        report_file.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps({**result, "report_file": str(report_file)}, indent=2))
+        progress(
+            f"completed; status={report['status']}; duration={duration_seconds:.3f}s"
+        )
+        return 0
+    except (VisualInspectionError, UnicodeDecodeError) as error:
+        print(f"visual-inspection: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

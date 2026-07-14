@@ -24,7 +24,7 @@ SENSITIVE_PATH = re.compile(
 )
 SECRET_TEXT = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----|"
-    r"(?i:(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|"
+    r"(?i:(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|"
     r"aws_access_key_id|aws_secret_access_key|aws_session_token|token))"
     r"\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{20,}['\"]?|"
     r"(?i:authorization)\s*:\s*['\"]?bearer\s+[A-Za-z0-9._~+/=-]{20,}"

@@ -93,6 +93,20 @@ class RepositoryCase(unittest.TestCase):
         with self.assertRaisesRegex(BundleError, "secret-like content"):
             build_bundle(self.repo, "local", None, "HEAD", 100_000)
 
+    def test_password_values_are_not_screened(self) -> None:
+        (self.repo / "app.txt").write_text(
+            "\n".join([
+                "const password = smartpedPasswordFromDetail(detail);",
+                "const fallbackPassword = process.env.SMARTPED_PASSWORD;",
+                'const testPassword = "abcdefghijklmnopqrstuvwxyz123456";',
+            ]),
+            encoding="utf-8",
+        )
+        bundle = build_bundle(self.repo, "local", None, "HEAD", 100_000)
+        self.assertIn("smartpedPasswordFromDetail", bundle.content)
+        self.assertIn("SMARTPED_PASSWORD", bundle.content)
+        self.assertIn("abcdefghijklmnopqrstuvwxyz123456", bundle.content)
+
     def test_merge_commit_requires_an_explicit_comparison(self) -> None:
         self.git("checkout", "-qb", "feature")
         (self.repo / "feature.txt").write_text("feature\n", encoding="utf-8")

@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import math
+import os
+import shlex
+import sys
+from pathlib import Path
+
+from second_opinion_lib.consultation import (
+    ConsultationError,
+    consultation_prompt,
+    extract_claude_report,
+    validate_brief,
+    validate_report,
+)
+from second_opinion_lib.repository import resolve_repository
+from second_opinion_lib.runtime import create_run
+from second_opinion_lib.structured_engines import (
+    DEFAULT_CODEX_MODEL,
+    DEFAULT_HEARTBEAT_SECONDS,
+    DEFAULT_TIMEOUT_SECONDS,
+    StructuredEngineError,
+    command_preview,
+    run_structured_engine,
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Obtain an independent Markdown opinion from Codex or Claude."
+    )
+    parser.add_argument("--engine", choices=["codex", "claude"], default="codex")
+    parser.add_argument(
+        "--repo",
+        type=Path,
+        required=True,
+        help="Repository that the advisor may inspect with full access.",
+    )
+    parser.add_argument(
+        "--model",
+        help="Optional model override; Codex defaults to gpt-5.6-sol, Claude to its CLI default.",
+    )
+    parser.add_argument("--max-prompt-kb", type=int, default=512)
+    parser.add_argument("--output-root", type=Path)
+    parser.add_argument(
+        "--timeout-seconds",
+        type=positive_seconds,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        help="Maximum advisor runtime before a failed consultation (default: 900).",
+    )
+    parser.add_argument(
+        "--heartbeat-seconds",
+        type=positive_seconds,
+        default=DEFAULT_HEARTBEAT_SECONDS,
+        help="Progress heartbeat interval written to stderr (default: 30).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Screen the brief and show the invocation without calling a model.",
+    )
+    return parser.parse_args()
+
+
+def positive_seconds(value: str) -> float:
+    try:
+        seconds = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a number greater than zero") from error
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return seconds
+
+
+def progress(message: str) -> None:
+    print(f"second-opinion {message}", file=sys.stderr, flush=True)
+
+
+def failure_report(limitation: str) -> str:
+    return (
+        "# Segunda opinião indisponível\n\n"
+        "O advisor não produziu um laudo completo.\n\n"
+        "## Limitação\n\n"
+        f"{limitation}\n"
+    )
+
+
+def dry_run_report(
+    engine: str,
+    repository: Path,
+    brief_bytes: int,
+    timeout_seconds: float,
+    heartbeat_seconds: float,
+    command: list[str],
+) -> str:
+    rendered_command = " ".join(shlex.quote(part) for part in command)
+    return f"""# Second Opinion — dry run
+
+- Engine: `{engine}`
+- Repository: `{repository}`
+- Repository access: full
+- Brief size: {brief_bytes} bytes
+- Timeout: {timeout_seconds:g}s
+- Heartbeat: {heartbeat_seconds:g}s
+
+```sh
+{rendered_command}
+```
+"""
+
+
+def main() -> int:
+    os.umask(0o077)
+    args = parse_args()
+    brief = sys.stdin.read()
+    try:
+        validate_brief(brief, args.max_prompt_kb * 1024)
+        repository = resolve_repository(args.repo)
+        if args.dry_run:
+            preview = command_preview(args.engine, repository, args.model)
+            print(
+                dry_run_report(
+                    args.engine,
+                    repository,
+                    len(brief.encode("utf-8")),
+                    args.timeout_seconds,
+                    args.heartbeat_seconds,
+                    preview["command"],
+                ),
+                end="",
+            )
+            return 0
+
+        run_id, run_dir = create_run(args.output_root)
+        selected_model = args.model or (
+            DEFAULT_CODEX_MODEL if args.engine == "codex" else "claude-cli-default"
+        )
+        progress(
+            f"run initialized; engine={args.engine}; model={selected_model}; "
+            f"run={run_id}; output_dir={run_dir}; timeout={args.timeout_seconds:g}s"
+        )
+        events_log = run_dir / "advisor-events.jsonl"
+        progress(f"follow raw events: tail -n 200 -f {shlex.quote(str(events_log))}")
+
+        report: str
+        succeeded = False
+        try:
+            engine_run = run_structured_engine(
+                args.engine,
+                repository,
+                consultation_prompt(brief),
+                args.model,
+                run_dir,
+                timeout_seconds=args.timeout_seconds,
+                heartbeat_seconds=args.heartbeat_seconds,
+                progress=progress,
+            )
+            if engine_run.timed_out:
+                report = failure_report(
+                    f"O advisor excedeu o timeout de {args.timeout_seconds:g}s. "
+                    f"Os logs parciais permanecem em `{run_dir}`."
+                )
+            else:
+                raw_report = validate_report(engine_run.raw_result)
+                report = (
+                    extract_claude_report(raw_report)
+                    if args.engine == "claude"
+                    else raw_report
+                )
+                succeeded = True
+            duration_seconds = engine_run.duration_seconds
+        except (StructuredEngineError, ConsultationError) as error:
+            report = failure_report(str(error))
+            duration_seconds = 0.0
+        except Exception:
+            report = failure_report(
+                f"Falha inesperada. Consulte os logs protegidos em `{run_dir}`."
+            )
+            duration_seconds = 0.0
+
+        report_file = run_dir / "report.md"
+        report_file.write_text(report.rstrip() + "\n", encoding="utf-8")
+        print(report.rstrip())
+        progress(
+            f"completed; status={'complete' if succeeded else 'failed'}; "
+            f"duration={duration_seconds:.3f}s; report={report_file}"
+        )
+        return 0 if succeeded else 2
+    except (ConsultationError, StructuredEngineError, UnicodeDecodeError) as error:
+        print(f"second-opinion: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

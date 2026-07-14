@@ -46,5 +46,7 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 
 ### Skills canônicas
 - `autoreview`: revisão source-aware isolada e estruturada com Codex ou Claude; Codex usa `gpt-5.6-sol` com reasoning `high` por padrão; suporta mudanças locais, branch e commit.
-- `behavior-validator`: validação source-blind de comportamento observável; aplicações web e Electron usam `agent-browser` em sessão isolada.
+- `behavior-validator`: validação de comportamento observável; aplicações web e Electron delegam para o worker context-aware de `visual-inspection`.
+- `second-opinion`: consulta independente com Codex ou Claude e acesso amplo ao repositório informado; produz laudo Markdown livre e coerente com o tema, progresso/heartbeat em stderr, timeout interno e logs incrementais, instruído a não alterar estado, sem usar clipboard.
 - `skill-cleaner`: auditoria de inventário, orçamento de contexto, uso recente, duplicações e descrições; `--no-logs` desativa a leitura de histórico.
+- `visual-inspection`: browser QA em worker Codex externo, fixado em `gpt-5.6-sol` com reasoning `medium`; recebe handoff completo e acesso total ao repositório, usa `agent-browser`, sessão isolada, progresso/heartbeat em stderr, timeout interno, evidências em `/tmp` e relatório estruturado.

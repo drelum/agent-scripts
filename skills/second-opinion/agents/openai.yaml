@@ -1,0 +1,4 @@
+interface:
+  display_name: "Second Opinion"
+  short_description: "Independent consultation with Codex or Claude"
+  default_prompt: "Use $second-opinion to obtain an independent Markdown opinion without implementation."

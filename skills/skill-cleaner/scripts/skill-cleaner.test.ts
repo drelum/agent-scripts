@@ -127,6 +127,19 @@ test("extracts user evidence without counting developer prompt listings", () => 
   assert.deepEqual(
     usageEvidence({
       type: "response_item",
+      payload: {
+        type: "custom_tool_call",
+        input: "const result = await tools.exec_command({cmd: 'cat /tmp/skills/demo/SKILL.md'});",
+      },
+    }),
+    {
+      callArgs:
+        "const result = await tools.exec_command({cmd: 'cat /tmp/skills/demo/SKILL.md'});",
+    },
+  );
+  assert.deepEqual(
+    usageEvidence({
+      type: "response_item",
       payload: { type: "message", role: "developer", content: ["$skill-cleaner"] },
     }),
     {},
@@ -139,6 +152,12 @@ test("resolves relative skill reads from function-call workdirs", () => {
       cmd: "cat skills/demo/SKILL.md",
       workdir: "/tmp/repo",
     })),
+    ["/tmp/repo/skills/demo/SKILL.md"],
+  );
+  assert.deepEqual(
+    referencedSkillPaths(
+      'const result = await tools.exec_command({"cmd":"cat skills/demo/SKILL.md","workdir":"/tmp/repo"});',
+    ),
     ["/tmp/repo/skills/demo/SKILL.md"],
   );
 });
