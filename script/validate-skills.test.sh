@@ -6,6 +6,6 @@ temp="$(mktemp -d)"
 trap 'rm -rf "$temp"' EXIT
 
 output="$(cd "$temp" && "$repo_root/script/validate-skills")"
-[[ "$output" == 'Skills validadas: 5.' ]]
+[[ "$output" == 'Skills validadas: 6.' ]]
 
 echo "validate-skills: testes aprovados"

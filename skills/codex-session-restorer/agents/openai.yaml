@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Session Restorer"
+  short_description: "Reabre sessões recentes do Codex em abas nomeadas."
+  default_prompt: "Verifique minhas sessões recentes do Codex e reabra cada uma em uma aba nomeada do Windows Terminal."
