@@ -83,3 +83,54 @@ def validate_report(report: dict[str, Any]) -> None:
         for field in ("title", "body"):
             if not isinstance(finding.get(field), str) or not finding[field].strip():
                 raise ReportError(f"finding {index} has invalid {field}")
+
+
+def render_markdown(
+    report: dict[str, Any],
+    *,
+    engine: str,
+    target: str,
+    duration_seconds: float,
+    report_file: str,
+) -> str:
+    findings = report["findings"]
+    status = "FINDINGS" if findings else "CLEAN"
+    lines = [
+        f"Status: {status}",
+        "",
+        "# Execução",
+        "",
+        f"- Engine: `{engine}`",
+        f"- Alvo: {target}",
+        f"- Duração: {duration_seconds:.3f}s",
+        f"- Relatório: `{report_file}`",
+        "",
+        "# Resumo",
+        "",
+        report["summary"].strip(),
+        "",
+        "# Achados",
+        "",
+    ]
+    if not findings:
+        lines.append("Nenhum finding acionável.")
+    for finding in findings:
+        lines.extend(
+            [
+                f"## {finding['severity']} — {finding['title'].strip()}",
+                "",
+                f"- Arquivo: `{finding['file']}`" if finding["file"] else "- Arquivo: não informado",
+                f"- Linha: {finding['line']}" if finding["line"] else "- Linha: não informada",
+                "",
+                finding["body"].strip(),
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "# Conclusão",
+            "",
+            "Patch correto." if not findings else "Patch requer avaliação dos findings acima.",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"

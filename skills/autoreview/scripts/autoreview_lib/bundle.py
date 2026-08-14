@@ -17,7 +17,7 @@ class ReviewBundle:
 
 
 SENSITIVE_PATH = re.compile(
-    r"(^|/)(\.env(?:\..*)?|id_rsa|id_ed25519|credentials(?:\.json)?|auth\.json|secrets?)(/|$)|"
+    r"(^|/)(id_rsa|id_ed25519|credentials(?:\.json)?|auth\.json|secrets?)(/|$)|"
     r"(^|/)(\.npmrc|\.pypirc|\.netrc|\.git-credentials)$|"
     r"(^|/)\.docker/config\.json$|\.(pem|p12|pfx|key)$",
     re.IGNORECASE,
@@ -92,7 +92,51 @@ def _untracked(repo: Path, max_file_bytes: int) -> str:
     return "".join(sections)
 
 
+def _has_head(repo: Path) -> bool:
+    return bool(git(repo, "rev-parse", "--verify", "HEAD", check=False).strip())
+
+
+def _initial_worktree(repo: Path, max_file_bytes: int) -> str:
+    sections: list[str] = []
+    paths = git(
+        repo,
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+    )
+    for relative in paths.split("\0"):
+        if not relative:
+            continue
+        if _sensitive_path(relative):
+            raise BundleError(f"sensitive path in initial working tree: {relative}")
+        file = repo / relative
+        if file.is_symlink():
+            raise BundleError(f"symlink cannot enter initial review bundle: {relative}")
+        if not file.is_file():
+            continue
+        size = file.stat().st_size
+        if size > max_file_bytes:
+            raise BundleError(f"initial file exceeds limit: {relative} ({size} bytes)")
+        with file.open("rb") as handle:
+            data = handle.read(max_file_bytes + 1)
+        if len(data) > max_file_bytes:
+            raise BundleError(f"initial file exceeds limit while reading: {relative}")
+        if b"\0" in data:
+            raise BundleError(f"binary initial file cannot enter review bundle: {relative}")
+        text = data.decode("utf-8", errors="strict")
+        _screen(relative, text)
+        sections.append(f"\n--- initial file: {relative} ---\n{text}")
+    return "".join(sections)
+
+
 def _local(repo: Path, max_file_bytes: int) -> ReviewBundle:
+    if not _has_head(repo):
+        return ReviewBundle(
+            "initial working tree (no HEAD)",
+            _initial_worktree(repo, max_file_bytes),
+        )
     _screen_changed_paths(
         git(repo, "diff", "--name-only", "--no-renames", "-z", "HEAD", "--"),
         "local changes",

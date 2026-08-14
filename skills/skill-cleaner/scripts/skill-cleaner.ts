@@ -64,6 +64,30 @@ type Budget = {
 const home = os.homedir();
 const args = new Set(process.argv.slice(2));
 
+function helpText(): string {
+  return `Uso:
+  skill-cleaner [opções]
+
+Audita inventário, orçamento de contexto, duplicações e uso recente de skills.
+
+Opções:
+  --months <n>             Janela de histórico em meses (padrão: 3)
+  --deep-logs              Inclui sessões arquivadas do Codex
+  --no-logs                Desativa leitura de histórico
+  --json                   Emite o relatório completo em JSON
+  --all                    Inclui skills desabilitadas na análise principal
+  --root <path>            Adiciona uma raiz de skills; pode ser repetido
+  --root-only              Analisa somente as raízes informadas com --root
+  --no-live                Ignora o inventário visível do Codex
+  --model <name>           Modelo usado para calcular o orçamento
+  --context-tokens <n>     Sobrescreve o tamanho da janela de contexto
+  --budget-percent <n>     Percentual reservado para skills (padrão: 2)
+  --chars-per-token <n>    Relação usada na estimativa de tokens (padrão: 4)
+  --max-log-mb <n>         Limite total de logs analisados (padrão: 300)
+  -h, --help               Mostra esta ajuda e encerra
+`;
+}
+
 function argValue(name: string, fallback: string): string {
   const raw = process.argv.slice(2);
   const index = raw.indexOf(name);
@@ -1258,6 +1282,10 @@ function render(
 }
 
 function main(): void {
+  if (args.has("--help") || args.has("-h")) {
+    console.log(helpText());
+    return;
+  }
   if (rootOnly && extraRoots.length === 0) {
     console.error("skill-cleaner: --root-only requires at least one --root <path>");
     process.exitCode = 2;

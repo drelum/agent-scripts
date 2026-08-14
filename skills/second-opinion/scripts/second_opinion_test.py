@@ -83,6 +83,36 @@ class ConsultationCase(unittest.TestCase):
         self.assertIn("--dangerously-skip-permissions", claude)
         self.assertEqual(claude[claude.index("--tools") + 1], "default")
 
+    def test_codex_fast_is_explicit_and_keeps_sol_high(self) -> None:
+        standard = codex_command(self.repo, Path("report.md"), None)
+        fast = codex_command(self.repo, Path("report.md"), None, fast=True)
+        self.assertNotIn("fast_mode", standard)
+        self.assertNotIn('service_tier="fast"', standard)
+        self.assertEqual(fast[fast.index("--model") + 1], "gpt-5.6-sol")
+        self.assertIn('model_reasoning_effort="high"', fast)
+        self.assertEqual(fast[fast.index("--enable") + 1], "fast_mode")
+        self.assertIn('service_tier="fast"', fast)
+
+    def test_fast_is_rejected_for_claude(self) -> None:
+        result = subprocess.run(
+            [
+                str(self.runner),
+                "--dry-run",
+                "--engine",
+                "claude",
+                "--fast",
+                "--repo",
+                str(self.repo),
+            ],
+            input="Question: Should we split this module?",
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--fast is valid only with --engine codex", result.stderr)
+
     def test_filtered_environment_excludes_credentials(self) -> None:
         source = {
             "HOME": "/home/reviewer",
@@ -109,8 +139,33 @@ class ConsultationCase(unittest.TestCase):
         self.assertTrue(result.stdout.startswith("# Second Opinion — dry run"))
         self.assertIn(f"Repository: `{self.repo.resolve()}`", result.stdout)
         self.assertIn("Repository access: full", result.stdout)
+        self.assertIn("Fast: false", result.stdout)
         self.assertNotIn("--output-schema", result.stdout)
         self.assertNotIn("--json-schema", result.stdout)
+
+    def test_dry_run_exposes_fast_without_changing_model_or_reasoning(self) -> None:
+        result = subprocess.run(
+            [
+                str(self.runner),
+                "--dry-run",
+                "--fast",
+                "--engine",
+                "codex",
+                "--repo",
+                str(self.repo),
+            ],
+            input="Question: Should we split this module?",
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Fast: true", result.stdout)
+        self.assertIn("gpt-5.6-sol", result.stdout)
+        self.assertIn('model_reasoning_effort="high"', result.stdout)
+        self.assertIn("fast_mode", result.stdout)
+        self.assertIn('service_tier="fast"', result.stdout)
 
     def test_runs_from_a_standalone_skill_copy(self) -> None:
         copied = self.repo / "second-opinion"

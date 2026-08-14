@@ -65,8 +65,9 @@ def codex_command(
     workspace: Path,
     output_file: Path,
     model: str | None,
+    fast: bool = False,
 ) -> list[str]:
-    return [
+    command = [
         "codex",
         "exec",
         "--ephemeral",
@@ -99,8 +100,11 @@ def codex_command(
         "--output-last-message",
         str(output_file),
         "--json",
-        "-",
     ]
+    if fast:
+        command.extend(["--enable", "fast_mode", "--config", 'service_tier="fast"'])
+    command.append("-")
+    return command
 
 
 def claude_command(model: str | None) -> list[str]:
@@ -130,6 +134,7 @@ def run_structured_engine(
     prompt: str,
     model: str | None,
     run_dir: Path,
+    fast: bool = False,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
     progress: Callable[[str], None] | None = None,
@@ -144,7 +149,7 @@ def run_structured_engine(
     with tempfile.TemporaryDirectory(prefix="second-opinion-engine-") as temp:
         output_file = Path(temp) / "report.md"
         command = (
-            codex_command(workspace, output_file, model)
+            codex_command(workspace, output_file, model, fast)
             if engine == "codex"
             else claude_command(model)
         )
@@ -437,10 +442,11 @@ def command_preview(
     engine: str,
     workspace: Path,
     model: str | None,
+    fast: bool = False,
 ) -> dict[str, Any]:
     if engine == "claude":
         return {"engine": engine, "command": claude_command(model)}
     return {
         "engine": engine,
-        "command": codex_command(workspace, Path("<report.md>"), model),
+        "command": codex_command(workspace, Path("<report.md>"), model, fast),
     }

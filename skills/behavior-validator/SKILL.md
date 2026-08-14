@@ -37,7 +37,7 @@ Validate observable behavior without inspecting source. Judge the running produc
 
 1. Parse the contract into user tasks, expected behavior, anti-cheat probes, setup, and evidence requirements.
 2. Prepare runtime access: URL, CLI command, API endpoint, fixture data, credentials, or generated artifact path.
-3. Exercise each task as a real user or operator. For browser targets, delegate the complete browser portion to `visual-inspection` and consume its structured report.
+3. Exercise each task as a real user or operator. For browser targets, delegate the complete browser portion to `visual-inspection` and consume its Markdown report.
 4. Run anti-cheat probes: vary input, refresh or reopen, test persistence, exercise empty and invalid states, and confirm actions perform real work.
 5. Capture compact, redacted evidence: screenshots, terminal excerpts, response summaries, file summaries, or accessibility observations.
 6. Emit a structured report. Use `<skill-dir>/references/report-schema.md` when machine-readable output is useful.

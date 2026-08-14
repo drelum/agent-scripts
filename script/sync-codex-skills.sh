@@ -83,7 +83,9 @@ fi
 source_real="$(realpath "$source_dir")"
 declare -A desired=()
 while IFS= read -r -d '' skill_file; do
-  skill_name="$(basename "$(dirname "$skill_file")")"
+  skill_dir="$(dirname "$skill_file")"
+  [[ -e "$skill_dir/.disabled" ]] && continue
+  skill_name="$(basename "$skill_dir")"
   desired["$skill_name"]=1
 done < <(find "$source_real" -mindepth 2 -maxdepth 2 -name SKILL.md -print0 | sort -z)
 

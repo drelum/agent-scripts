@@ -198,3 +198,20 @@ test("runs when invoked through a symbolic link", (context) => {
   assert.match(result.stdout, /Skill Cleaner Report/);
   assert.match(result.stdout, /1 skills/);
 });
+
+test("prints help without running the audit", () => {
+  const script = fileURLToPath(new URL("./skill-cleaner.ts", import.meta.url));
+  for (const flag of ["--help", "-h"]) {
+    const result = spawnSync(
+      process.execPath,
+      ["--experimental-strip-types", script, flag],
+      { encoding: "utf8" },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /^Uso:\n  skill-cleaner \[opções\]/);
+    assert.match(result.stdout, /--root-only/);
+    assert.match(result.stdout, /-h, --help/);
+    assert.doesNotMatch(result.stdout, /Skill Cleaner Report/);
+  }
+});

@@ -15,12 +15,16 @@ Resolve `<skill-dir>` as the directory containing this `SKILL.md`, regardless of
 
 ```bash
 <skill-dir>/scripts/autoreview --engine codex
+<skill-dir>/scripts/autoreview --engine codex --fast
 <skill-dir>/scripts/autoreview --engine claude
 ```
+
+Before invoking from Codex, preserve the calling client's tier: use explicit session/status metadata when available; otherwise read the persisted `service_tier` selected by `/fast` in the active Codex config. Pass `--fast` when that value is `fast`, or when the user explicitly requests Fast. Omit it when Fast is disabled or cannot be established. From Claude, omit it unless the user explicitly requests a Codex Fast review. The flag preserves `gpt-5.6-sol` and reasoning `high`; it changes only the Codex service tier.
 
 Default `--mode auto` behavior:
 
 - dirty checkout: review local changes;
+- repository without a first commit: review the initial working tree directly;
 - non-main branch: review against `origin/main` or `main`;
 - clean main: stop and request an explicit target.
 
@@ -32,11 +36,19 @@ Explicit targets:
 <skill-dir>/scripts/autoreview --mode commit --commit HEAD --engine codex
 ```
 
-2. Let the helper build a bounded review bundle. It must fail closed on sensitive paths, private keys, API keys, tokens, binary untracked files, or oversized input. Password assignments are not content-screened.
-3. Read the structured findings. Confirm each one by inspecting source, tests, and dependency contracts.
+2. Let the helper build a bounded review bundle. It must fail closed on sensitive paths, private keys, API keys, tokens, binary untracked files, or oversized input. Environment-file paths are allowed and screened by content like other files. Password assignments are not content-screened.
+3. Read the Markdown report. The helper validates structured engine output internally, then renders the human-facing result. Confirm each finding by inspecting source, tests, and dependency contracts.
 4. Accept only concrete defects introduced or exposed by the reviewed change. Reject style-only, speculative, pre-existing, or overengineered findings.
 5. Fix accepted findings within the frozen task scope, rerun relevant tests, then rerun the same review engine.
-6. Stop when the helper exits clean or the scope governor requires a pause.
+6. Treat a valid report as a completed run. Use `Status: CLEAN|FINDINGS`, not the process exit code, to interpret the diagnosis; then apply the scope governor.
+
+## Runtime Observability
+
+- Internal timeout: 30 minutes by default; override with `--timeout-seconds`. Do not wrap the helper in an external timeout.
+- Heartbeat: emitted to stderr every 30 seconds by default; override with `--heartbeat-seconds`.
+- Incremental raw logs: private user-specific run directory under `/tmp/autoreview-<uid>`; the helper prints the exact `tail -n 200 -f` command when it starts.
+- Filtered streaming: lifecycle events always appear on stderr. Add `--stream-engine-output` for extra safe activity summaries. Raw commands, engine-emitted paths, model text, and tool payloads never stream to the terminal.
+- Final Markdown report: stdout and `report.md` in the private run directory. A valid `CLEAN` or `FINDINGS` report exits 0; operational failures such as timeout, invalid report, or unavailable engine exit 2. Partial events remain diagnostic evidence, never a valid review result.
 
 ## Scope Governor
 
@@ -52,6 +64,7 @@ Explicit targets:
 
 - Codex: ephemeral execution, repository-scoped read-only permission profile, empty tool-shell environment, project instructions disabled, user config and exec rules ignored.
 - Codex default reviewer: `gpt-5.6-sol` with reasoning effort `high`; an explicit `--model` overrides the model.
+- Codex Fast: optional `--fast` enables the CLI Fast feature and selects `service_tier="fast"`. Repass the calling client's known or persisted Fast selection because the helper intentionally ignores user config.
 - Claude: print mode, safe mode, user setting source only, MCP and all file/shell/web tools disabled.
 - Never pass credentials, environment dumps, private keys, or secret-bearing files to a reviewer.
 - Do not run reviewer panels or another engine unless the user asks.
@@ -66,9 +79,12 @@ Use both when a non-trivial user-visible change needs implementation review and 
 
 ## Final Report
 
-Include:
+The helper output uses these sections:
 
-- engine and target;
-- findings accepted or rejected, with brief reasons;
-- tests or evidence rerun after accepted fixes;
-- final clean result or remaining blocker.
+- `Status: CLEAN|FINDINGS`;
+- `# Execução`;
+- `# Resumo`;
+- `# Achados`;
+- `# Conclusão`.
+
+Structured JSON remains an internal engine contract only. The calling agent reports findings accepted or rejected, tests or evidence rerun after fixes, and the final clean result or remaining blocker.

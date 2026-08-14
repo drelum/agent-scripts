@@ -2,13 +2,22 @@
 from __future__ import annotations
 
 import argparse
-import json
+import math
+import shlex
 import sys
 from pathlib import Path
 
 from autoreview_lib.bundle import BundleError, build_bundle
-from autoreview_lib.engines import EngineError, command_preview, review_prompt, run_engine
-from autoreview_lib.report import ReportError, extract_report
+from autoreview_lib.engines import (
+    DEFAULT_HEARTBEAT_SECONDS,
+    DEFAULT_OUTPUT_ROOT,
+    DEFAULT_TIMEOUT_SECONDS,
+    EngineError,
+    command_preview,
+    review_prompt,
+    run_engine,
+)
+from autoreview_lib.report import ReportError, extract_report, render_markdown
 
 
 def parse_args() -> argparse.Namespace:
@@ -21,10 +30,36 @@ def parse_args() -> argparse.Namespace:
         "--model",
         help="Optional engine model override; Codex defaults to gpt-5.6-sol, Claude to its CLI default.",
     )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use Codex Fast service tier; valid only with --engine codex.",
+    )
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--max-bundle-kb", type=int, default=1024)
+    parser.add_argument("--timeout-seconds", type=positive_seconds, default=DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument("--heartbeat-seconds", type=positive_seconds, default=DEFAULT_HEARTBEAT_SECONDS)
+    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument(
+        "--stream-engine-output",
+        action="store_true",
+        help="Emit additional filtered engine activity to stderr; raw events remain in the run log.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Build and screen the bundle without invoking a model.")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.fast and args.engine != "codex":
+        parser.error("--fast is valid only with --engine codex")
+    return args
+
+
+def positive_seconds(value: str) -> float:
+    try:
+        seconds = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a number") from error
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError("must be a finite number greater than zero")
+    return seconds
 
 
 def main() -> int:
@@ -39,19 +74,53 @@ def main() -> int:
             max_bundle_bytes=args.max_bundle_kb * 1024,
         )
         if args.dry_run:
-            print(json.dumps({
-                "target": bundle.label,
-                "bundle_bytes": len(bundle.content.encode("utf-8")),
-                **command_preview(args.engine, repo, args.model),
-            }, indent=2))
+            preview = command_preview(args.engine, repo, args.model, args.fast)
+            print(
+                "\n".join(
+                    [
+                        "Status: DRY-RUN",
+                        "",
+                        "# Escopo",
+                        "",
+                        f"- Alvo: {bundle.label}",
+                        f"- Bundle: {len(bundle.content.encode('utf-8'))} bytes",
+                        "",
+                        "# Comando",
+                        "",
+                        "```bash",
+                        shlex.join(preview["command"]),
+                        "```",
+                    ]
+                )
+            )
             return 0
-        raw = run_engine(args.engine, repo, review_prompt(bundle.label, bundle.content), args.model)
-        report = extract_report(raw)
-        print(json.dumps({"engine": args.engine, "target": bundle.label, **report}, indent=2))
+        run = run_engine(
+            args.engine,
+            repo,
+            review_prompt(bundle.label, bundle.content),
+            args.model,
+            fast=args.fast,
+            timeout_seconds=args.timeout_seconds,
+            heartbeat_seconds=args.heartbeat_seconds,
+            stream_engine_output=args.stream_engine_output,
+            output_root=args.output_root,
+            progress=lambda message: print(f"autoreview: {message}", file=sys.stderr, flush=True),
+        )
+        report = extract_report(run.result)
+        report_file = run.run_dir / "report.md"
+        rendered = render_markdown(
+            report,
+            engine=args.engine,
+            target=bundle.label,
+            duration_seconds=run.duration_seconds,
+            report_file=str(report_file),
+        )
+        report_file.write_text(rendered, encoding="utf-8")
+        print(rendered, end="")
         findings = report["findings"]
         if findings:
             print(f"autoreview: {len(findings)} actionable finding(s)", file=sys.stderr)
-            return 1
+            return 0
         print("autoreview clean: no actionable findings reported", file=sys.stderr)
         return 0
     except (BundleError, EngineError, ReportError, UnicodeDecodeError) as error:

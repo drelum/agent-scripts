@@ -8,13 +8,17 @@ trap 'rm -rf "$tmp"' EXIT
 source_dir="$tmp/source"
 codex_target="$tmp/codex"
 claude_target="$tmp/claude"
-mkdir -p "$source_dir/demo" "$source_dir/collision" "$codex_target/collision" "$tmp/foreign"
+mkdir -p "$source_dir/demo" "$source_dir/collision" "$source_dir/disabled" "$codex_target/collision" "$tmp/foreign"
 printf '%s\n' '---' 'name: demo' 'description: "Demo skill."' '---' '# Demo' >"$source_dir/demo/SKILL.md"
 printf '%s\n' '---' 'name: collision' 'description: "Collision skill."' '---' '# Collision' >"$source_dir/collision/SKILL.md"
+printf '%s\n' '---' 'name: disabled' 'description: "Disabled skill."' '---' '# Disabled' >"$source_dir/disabled/SKILL.md"
+touch "$source_dir/disabled/.disabled"
 
 mkdir -p "$codex_target" "$claude_target"
 ln -s "$tmp/foreign" "$claude_target/foreign"
 ln -s "$source_dir/stale" "$codex_target/stale"
+ln -s "$source_dir/disabled" "$codex_target/disabled"
+ln -s "$source_dir/disabled" "$claude_target/disabled"
 
 "$repo_root/script/sync-codex-skills.sh" \
   --source "$source_dir" \
@@ -29,6 +33,8 @@ ln -s "$source_dir/stale" "$codex_target/stale"
 [[ -d "$codex_target/collision" ]]
 [[ "$(readlink "$claude_target/foreign")" == "$tmp/foreign" ]]
 [[ ! -e "$codex_target/stale" && ! -L "$codex_target/stale" ]]
+[[ ! -e "$codex_target/disabled" && ! -L "$codex_target/disabled" ]]
+[[ ! -e "$claude_target/disabled" && ! -L "$claude_target/disabled" ]]
 
 second="$($repo_root/script/sync-codex-skills.sh \
   --source "$source_dir" \

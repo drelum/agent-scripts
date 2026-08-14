@@ -42,6 +42,11 @@ def parse_args() -> argparse.Namespace:
         "--model",
         help="Optional model override; Codex defaults to gpt-5.6-sol, Claude to its CLI default.",
     )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use Codex Fast service tier; valid only with --engine codex.",
+    )
     parser.add_argument("--max-prompt-kb", type=int, default=512)
     parser.add_argument("--output-root", type=Path)
     parser.add_argument(
@@ -61,7 +66,10 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Screen the brief and show the invocation without calling a model.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.fast and args.engine != "codex":
+        parser.error("--fast is valid only with --engine codex")
+    return args
 
 
 def positive_seconds(value: str) -> float:
@@ -93,6 +101,7 @@ def dry_run_report(
     brief_bytes: int,
     timeout_seconds: float,
     heartbeat_seconds: float,
+    fast: bool,
     command: list[str],
 ) -> str:
     rendered_command = " ".join(shlex.quote(part) for part in command)
@@ -104,6 +113,7 @@ def dry_run_report(
 - Brief size: {brief_bytes} bytes
 - Timeout: {timeout_seconds:g}s
 - Heartbeat: {heartbeat_seconds:g}s
+- Fast: {str(fast).lower()}
 
 ```sh
 {rendered_command}
@@ -119,7 +129,7 @@ def main() -> int:
         validate_brief(brief, args.max_prompt_kb * 1024)
         repository = resolve_repository(args.repo)
         if args.dry_run:
-            preview = command_preview(args.engine, repository, args.model)
+            preview = command_preview(args.engine, repository, args.model, args.fast)
             print(
                 dry_run_report(
                     args.engine,
@@ -127,6 +137,7 @@ def main() -> int:
                     len(brief.encode("utf-8")),
                     args.timeout_seconds,
                     args.heartbeat_seconds,
+                    args.fast,
                     preview["command"],
                 ),
                 end="",
@@ -139,7 +150,8 @@ def main() -> int:
         )
         progress(
             f"run initialized; engine={args.engine}; model={selected_model}; "
-            f"run={run_id}; output_dir={run_dir}; timeout={args.timeout_seconds:g}s"
+            f"fast={str(args.fast).lower()}; run={run_id}; output_dir={run_dir}; "
+            f"timeout={args.timeout_seconds:g}s"
         )
         events_log = run_dir / "advisor-events.jsonl"
         progress(f"follow raw events: tail -n 200 -f {shlex.quote(str(events_log))}")
@@ -153,6 +165,7 @@ def main() -> int:
                 consultation_prompt(brief),
                 args.model,
                 run_dir,
+                fast=args.fast,
                 timeout_seconds=args.timeout_seconds,
                 heartbeat_seconds=args.heartbeat_seconds,
                 progress=progress,
