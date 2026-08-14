@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Sincroniza o AGENTS.md deste repo com o arquivo usado pelo Codex (`~/.codex/AGENTS.md`).
+# Aponta o AGENTS.md global do Codex para a fonte canônica deste repo.
 # Uso:
 #   bash script/ensure_agent_std.sh
 #
@@ -24,17 +24,28 @@ if [[ ! -f "$src" ]]; then
 fi
 
 mkdir -p "$(dirname "$dst")"
-install -m 644 "$src" "$dst"
+src_real="$(realpath "$src")"
 
-if cmp -s "$src" "$dst"; then
-  echo "OK: $dst atualizado (idêntico ao repo)."
-else
-  echo "Erro: $dst não ficou idêntico ao repo." >&2
+if [[ -L "$dst" ]]; then
+  if [[ "$(realpath -m "$dst")" == "$src_real" ]]; then
+    echo "OK: $dst já aponta para $src_real."
+  else
+    echo "Erro: symlink global estrangeiro preservado: $dst -> $(readlink "$dst")" >&2
+    exit 2
+  fi
+elif [[ -e "$dst" && ! -f "$dst" ]]; then
+  echo "Erro: destino global não é arquivo regular nem symlink: $dst" >&2
   exit 2
+elif [[ -f "$dst" ]] && ! cmp -s "$src" "$dst"; then
+  echo "Erro: $dst possui conteúdo diferente; preserve ou reconcilie antes de substituir." >&2
+  exit 2
+else
+  tmp_link="${dst}.tmp.$$"
+  ln -s "$src_real" "$tmp_link"
+  mv -Tf "$tmp_link" "$dst"
+  echo "OK: $dst agora aponta para $src_real."
 fi
 
-src_real="$(realpath "$src")"
-dst_real="$(realpath "$dst")"
 claude_links_created=0
 claude_links_unchanged=0
 claude_links_preserved=0
@@ -47,9 +58,6 @@ ensure_claude_link() {
     current="$(realpath -m "$destination")"
     if [[ "$current" == "$src_real" ]]; then
       claude_links_unchanged=$((claude_links_unchanged + 1))
-    elif [[ "$current" == "$dst_real" ]]; then
-      ln -sfnT "$src_real" "$destination"
-      claude_links_created=$((claude_links_created + 1))
     else
       echo "Aviso: symlink estrangeiro preservado: $destination -> $(readlink "$destination")" >&2
       claude_links_preserved=$((claude_links_preserved + 1))

@@ -8,11 +8,11 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 - Mantenha todos os arquivos sem dependencias e portaveis: os scripts devem rodar isolados entre repositorios. Nao adicione alias de path do `tsconfig`, pastas de codigo compartilhadas, nem duplique codigo alem do minimo necessario para manter o espelho auto-contido.
 
 ## AGENTS no formato ponteiro
-- O texto de guardrail compartilhado agora vive apenas neste repo: `AGENTS.MD` (regras compartilhadas + lista de ferramentas).
-- O Codex recebe uma cópia idêntica em `~/.codex/AGENTS.md`; o Claude recebe links globais em `~/.claude/CLAUDE.md` e `~/.claude/AGENTS.md` apontando para a fonte canônica.
+- O texto de guardrail compartilhado vive apenas neste repo: `AGENTS.md`.
+- Codex e Claude usam links globais apontando para essa fonte canônica: `~/.codex/AGENTS.md`, `~/.claude/CLAUDE.md` e `~/.claude/AGENTS.md`.
 - Os arquivos `AGENTS.md` e `CLAUDE.md` de cada repo consumidor começam com a linha `READ: ~/.codex/AGENTS.md` (regras específicas do repo só depois dessa linha, se realmente necessário).
 - Nao copie mais os blocos `[shared]` ou `<tools>` para outros repositorios. Em vez disso, mantenha este repo atualizado e faca os downstream relerem o `AGENTS.MD` ao iniciar o trabalho.
-- Ao atualizar as instrucoes compartilhadas, edite `agent-scripts/AGENTS.MD`, replique a mudanca em `~/.codex/AGENTS.md` e deixe os repos downstream continuarem referenciando o ponteiro.
+- Ao atualizar as instruções compartilhadas, edite `agent-scripts/AGENTS.md`; os links globais e os ponteiros downstream passam a mudança adiante sem cópias.
 - Sincronização completa de Skills e diretivas: `./script/sync-agent-environment.sh`
 - Somente diretivas (global + projetos em `~/Projects`): `./script/ensure_agent_std.sh`
 
@@ -28,7 +28,10 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
   - `./bin/gws-aitrus`: usa `~/.config/gws-aitrus`; conta esperada `andre@aitrus.com.br`.
   - `./bin/gws-pessoal`: usa `~/.config/gws-pessoal`; conta esperada `drelum@gmail.com`.
 - Use sempre o wrapper explicito quando a conta importar. Evite chamar `gws` diretamente para Drive/Gmail/Docs/Sheets/Slides.
-- Login com escopos completos:
+- Login Aitrus para os serviços usados pelo assistente:
+  `./bin/gws-aitrus auth login --services gmail,calendar,drive,docs,sheets,slides`
+- Não usar `--full` nesse fluxo: ele acrescenta `cloud-platform`, submetendo o token ao Google Cloud Session Control e ao erro `invalid_rapt`. Após o login, confirmar em `./bin/gws-aitrus auth status` que `cloud-platform` não aparece em `scopes`; se persistir por grant anterior, revogar/limpar a autorização antiga e autenticar novamente.
+- Login pessoal:
   `./bin/gws-pessoal auth login --services drive,docs,sheets,slides,gmail`
 - Se a conta pessoal falhar com permissao do projeto Google, confirmar que `drelum@gmail.com` esta como OAuth test user e com IAM `Service Usage Consumer` no projeto OAuth.
 
@@ -45,9 +48,12 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 - Substituição explícita de diretórios reais com nomes canônicos: `./script/sync-codex-skills.sh --replace-existing`.
 
 ### Skills canônicas
-- `autoreview`: revisão source-aware isolada e estruturada com Codex ou Claude; Codex usa `gpt-5.6-sol` com reasoning `high` por padrão; suporta mudanças locais, branch e commit.
-- `behavior-validator`: validação de comportamento observável; aplicações web e Electron delegam para o worker context-aware de `visual-inspection`.
+- `autoreview`: revisão source-aware isolada com Codex ou Claude; valida a resposta estruturada internamente e entrega relatório Markdown; Codex usa `gpt-5.6-sol` com reasoning `high` por padrão; suporta mudanças locais, branch e commit.
+- `behavior-validator`: temporariamente desabilitada por `skills/behavior-validator/.disabled`.
 - `codex-session-restorer`: localiza sessões interativas recentes do Codex e reabre cada uma em uma aba nomeada do Windows Terminal a partir do WSL.
 - `second-opinion`: consulta independente com Codex ou Claude e acesso amplo ao repositório informado; produz laudo Markdown livre e coerente com o tema, progresso/heartbeat em stderr, timeout interno e logs incrementais, instruído a não alterar estado, sem usar clipboard.
 - `skill-cleaner`: auditoria de inventário, orçamento de contexto, uso recente, duplicações e descrições; `--no-logs` desativa a leitura de histórico.
-- `visual-inspection`: browser QA em worker Codex externo, fixado em `gpt-5.6-sol` com reasoning `medium`; recebe handoff completo e acesso total ao repositório, usa `agent-browser`, sessão isolada, progresso/heartbeat em stderr, timeout interno, evidências em `/tmp` e relatório estruturado.
+- `visual-inspection`: browser QA em worker Codex externo, fixado em `gpt-5.6-sol` com reasoning `medium`; recebe handoff completo e acesso total ao repositório, usa `agent-browser`, sessão isolada, progresso/heartbeat em stderr, timeout interno, evidências em `/tmp` e relatório Markdown.
+- `windows-chrome-browser`: controla somente páginas e abas em perfis persistentes do Chrome Windows a partir do WSL, preservando autenticação humana e isolando CDP, sessão e aba.
+
+Uma skill com marcador `.disabled` permanece na fonte canônica, mas não é publicada para Codex ou Claude. Remova o marcador e execute a sincronização para reativá-la.

@@ -32,6 +32,8 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Pessoal: de `~/Projects`, usar `./agent-scripts/bin/gws-pessoal`; usuário esperado `drelum@gmail.com`.
 - Fora de `~/Projects`, usar `~/Projects/agent-scripts/bin/gws-aitrus` ou `~/Projects/agent-scripts/bin/gws-pessoal`.
 - Quando a conta importar, usar o wrapper explícito antes de ler Drive/Gmail/Docs/Sheets/Slides.
+- Login Aitrus para Gmail/Calendar/Drive/Docs/Sheets/Slides: `~/Projects/agent-scripts/bin/gws-aitrus auth login --services gmail,calendar,drive,docs,sheets,slides`; não usar `--full`, pois ele adiciona `cloud-platform` e pode causar expiração frequente por `invalid_rapt`.
+- Após autenticar a Aitrus, conferir `auth status`; `cloud-platform` deve estar ausente. Se persistir por grant anterior, revogar/limpar a autorização antiga e autenticar novamente.
 
 ## WhatsApp / wacli
 - CLI local: `wacli`.
@@ -42,6 +44,8 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 
 ## Flow & Runtime
 - Use repo's package manager/runtime; no swaps w/o approval.
+- `aura-beta` e `aura-ui-beta` são os protótipos da esteira rápida do Aura; mantê-los sempre sincronizados, respectivamente, com a branch `beta` de `aura` e `aura-ui`. Neles, trabalhar no checkout existente; não criar worktree separada.
+- Linear: slug `<ticket-number>-<descrição-curta>` sem o prefixo `aitrus-`; usar o mesmo slug em branch e worktree. Portless: frontend `ui.<slug>.<projeto>`; backend `api.<slug>.<projeto>`. O `AGENTS.md` local registra apenas o slug estável e os comandos de desenvolvimento.
 - Dev server: prefer `portless` (requires Node.js 24+); if missing, install global `npm install -g portless`; do not add dependency to project; do not say "subir o portless"; correct: subir o servidor do projeto usando `portless`, com URL no nome do projeto; para servidor iniciado por agente, passar nome explícito; `portless` sem args só quando `portless.json`/`package.json` definir nome/script e a URL inferida for clara; long-running server => `tmux` + `portless`; inside session prefer `portless <nome-do-projeto> <comando>` (ex.: projeto `api.myapp` -> `portless api.myapp pnpm dev` -> `https://api.myapp.localhost`); reportar a URL final exibida pelo `portless`; `portless` injects `PORT`, `HOST=127.0.0.1`, `PORTLESS_URL`, `NODE_EXTRA_CA_CERTS` quando HTTPS ativo; after start, always report `tmux attach -t <sessao>` + final URL.
 - Servers via `tmux` (sessão sobrevive a crash): criar sessão (sem server) -> `send-keys` (start) -> informar `tmux attach -t <sessao>`. Ex:
 ```bash
@@ -51,11 +55,12 @@ tmux send -t "$s" "cd '$PWD' && portless <nome-do-projeto> pnpm dev" C-m; tmux a
 
 ## Build / Test
 - Before handoff: full gate (biome check/typecheck/tests/knip).
+- Testes locais no WSL: limitar o test runner a no máximo 4 workers (`VITEST_MAX_WORKERS=4` ou opção equivalente).
 - Mudança não trivial de código: usar `autoreview` antes do handoff; dispensar em docs-only, mudança trivial, revisão independente equivalente ou quando eu optar por não executar.
 - Auto Review: congelar o escopo original; no máximo 2 ciclos de correção. Sem convergência, parar e classificar o restante em bloqueador do escopo, follow-up ou decisão necessária; não ampliar arquivos/LOC em mais de 2x sem aprovação.
 - Segunda opinião solicitada: usar `second-opinion --repo <repository>` para chamar um único Codex ou Claude com acesso amplo para investigação e retornar um laudo Markdown livre, coerente com o tema; acompanhar heartbeat e timeout interno do runner, sem envolver a execução em timeout externo; instruir explicitamente a não alterar arquivos ou estado e não implementar a recomendação sem pedido separado.
-- Mudança de comportamento observável: usar `behavior-validator` após a implementação e os testes, validando por superfícies públicas sem ler o código-fonte.
-- Quando ambos se aplicarem: `autoreview` primeiro; `behavior-validator` depois. Não executar painel ou múltiplos engines sem solicitação.
+- Mudança de comportamento observável em UI/browser: usar `visual-inspection` após a implementação e os testes; `behavior-validator` está temporariamente desabilitada.
+- Quando ambos se aplicarem: `autoreview` primeiro; `visual-inspection` depois. Não executar painel ou múltiplos engines sem solicitação.
 - Lint == `biome check` only (no `pnpm lint`).
 - Testes visuais e browser QA: usar a skill `visual-inspection`, que chama um worker Codex externo fixado em `gpt-5.6-sol` com reasoning `medium`; entregar ao worker um handoff completo do contexto relevante e acesso total ao repositório; o worker usa `agent-browser` em sessão própria/isolada, com heartbeat e timeout interno. Não executar browser QA no agente principal, envolver o runner em timeout externo nem fazer fallback silencioso.
 - Dependency/unused check: use `knip` to find unused dependencies, exports and files.
@@ -96,6 +101,7 @@ tmux send -t "$s" "cd '$PWD' && portless <nome-do-projeto> pnpm dev" C-m; tmux a
 Avoid "AI slop" UI. Be opinionated + distinctive.
 
 Do:
+- UIs devem funcionar corretamente em viewport mínima de 1024×768.
 - Typography: pick a real font; avoid Inter/Roboto/Arial/system defaults.
 - Theme: commit to a palette; use CSS vars; bold accents > timid gradients.
 - Motion: 1-2 high-impact moments (staggered reveal beats random micro-anim).

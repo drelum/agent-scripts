@@ -23,13 +23,16 @@ ln -s "$temp/missing/nested/claude.md" "$broken_project/CLAUDE.md"
 
 output="$("$repo_root/script/sync-agent-environment.sh")"
 
-cmp -s "$repo_root/AGENTS.md" "$HOME/.codex/AGENTS.md"
+[[ -L "$HOME/.codex/AGENTS.md" ]]
+[[ "$(realpath "$HOME/.codex/AGENTS.md")" == "$(realpath "$repo_root/AGENTS.md")" ]]
 [[ "$(realpath "$HOME/.claude/CLAUDE.md")" == "$(realpath "$repo_root/AGENTS.md")" ]]
 [[ "$(realpath "$HOME/.claude/AGENTS.md")" == "$(realpath "$repo_root/AGENTS.md")" ]]
-for skill in autoreview behavior-validator second-opinion skill-cleaner visual-inspection; do
+for skill in autoreview second-opinion skill-cleaner visual-inspection; do
   [[ "$(realpath "$HOME/.agents/skills/$skill")" == "$(realpath "$repo_root/skills/$skill")" ]]
   [[ "$(realpath "$HOME/.claude/skills/$skill")" == "$(realpath "$repo_root/skills/$skill")" ]]
 done
+[[ ! -e "$HOME/.agents/skills/behavior-validator" && ! -L "$HOME/.agents/skills/behavior-validator" ]]
+[[ ! -e "$HOME/.claude/skills/behavior-validator" && ! -L "$HOME/.claude/skills/behavior-validator" ]]
 [[ "$(head -n 1 "$project/AGENTS.md")" == 'READ: ~/.codex/AGENTS.md' ]]
 [[ "$(head -n 1 "$project/CLAUDE.md")" == 'READ: ~/.codex/AGENTS.md' ]]
 [[ -L "$linked_project/AGENTS.md" ]]
@@ -41,5 +44,17 @@ done
 [[ ! -e "$temp/missing/nested/agents.md" ]]
 [[ ! -e "$temp/missing/nested/claude.md" ]]
 grep -q 'Ambiente de agentes sincronizado com sucesso.' <<<"$output"
+
+second_output="$("$repo_root/script/sync-agent-environment.sh")"
+[[ -L "$HOME/.codex/AGENTS.md" ]]
+grep -q 'já aponta para' <<<"$second_output"
+
+unlink "$HOME/.codex/AGENTS.md"
+printf '%s\n' '# Conteúdo local divergente' >"$HOME/.codex/AGENTS.md"
+if "$repo_root/script/ensure_agent_std.sh" >/dev/null 2>&1; then
+  echo "sync-agent-environment: conteúdo global divergente deveria ser preservado" >&2
+  exit 1
+fi
+[[ "$(cat "$HOME/.codex/AGENTS.md")" == '# Conteúdo local divergente' ]]
 
 echo "sync-agent-environment: testes aprovados"
