@@ -1,0 +1,4 @@
+interface:
+  display_name: "Windows Chrome Browser"
+  short_description: "Controla páginas e abas do Chrome Windows."
+  default_prompt: "Use $windows-chrome-browser para controlar páginas e abas no Chrome Windows a partir do WSL."

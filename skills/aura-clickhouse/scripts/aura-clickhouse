@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly URL_VAR="CLICKHOUSE_DATASOURCE_URL"
+readonly USER_VAR="CLICKHOUSE_DATASOURCE_USERNAME"
+readonly PASSWORD_VAR="CLICKHOUSE_DATASOURCE_PASSWORD"
+readonly DEFAULT_TIMEOUT_SECONDS=60
+readonly DEFAULT_EXECUTION_SECONDS=55
+
+credential_source=""
+clickhouse_jdbc_url=""
+clickhouse_username=""
+clickhouse_password=""
+clickhouse_endpoint=""
+clickhouse_database="default"
+credential_file=""
+
+die() {
+  printf 'aura-clickhouse: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+Uso:
+  aura-clickhouse ping
+  aura-clickhouse info
+  aura-clickhouse databases
+  aura-clickhouse tables [banco]
+  aura-clickhouse describe banco.tabela
+  aura-clickhouse show-create banco.tabela
+  aura-clickhouse columns termo
+  aura-clickhouse query [arquivo.sql]
+EOF
+}
+
+environment_value() {
+  case "$1" in
+    "$URL_VAR") printf '%s' "${CLICKHOUSE_DATASOURCE_URL:-}" ;;
+    "$USER_VAR") printf '%s' "${CLICKHOUSE_DATASOURCE_USERNAME:-}" ;;
+    "$PASSWORD_VAR") printf '%s' "${CLICKHOUSE_DATASOURCE_PASSWORD:-}" ;;
+    *) return 1 ;;
+  esac
+}
+
+load_current_environment() {
+  local present=0
+  local variable value
+
+  for variable in "$URL_VAR" "$USER_VAR" "$PASSWORD_VAR"; do
+    value="$(environment_value "$variable")"
+    [[ -n "$value" ]] && present=$((present + 1))
+  done
+
+  if [[ "$present" -eq 0 ]]; then
+    return 1
+  fi
+  if [[ "$present" -ne 3 ]]; then
+    die "configuração parcial no ambiente atual; defina as três variáveis CLICKHOUSE_DATASOURCE_* ou remova todas"
+  fi
+
+  clickhouse_jdbc_url="$CLICKHOUSE_DATASOURCE_URL"
+  clickhouse_username="$CLICKHOUSE_DATASOURCE_USERNAME"
+  clickhouse_password="$CLICKHOUSE_DATASOURCE_PASSWORD"
+  credential_source="ambiente atual"
+}
+
+selected_process_environment() {
+  local pid="$1"
+  { tr '\0' '\n' < "/proc/${pid}/environ"; } 2>/dev/null \
+    | sed -n "/^${URL_VAR}=./p;/^${USER_VAR}=./p;/^${PASSWORD_VAR}=./p" \
+    | sort
+}
+
+process_environment_value() {
+  local pid="$1"
+  local variable="$2"
+  selected_process_environment "$pid" \
+    | sed -n "s/^${variable}=//p" \
+    | head -n 1
+}
+
+load_process_environment() {
+  local env_path pid selected fingerprint
+  local -a fingerprints=()
+  declare -A representative_pid=()
+
+  for env_path in /proc/[0-9]*/environ; do
+    [[ -r "$env_path" ]] || continue
+    pid="${env_path#/proc/}"
+    pid="${pid%/environ}"
+    selected="$(selected_process_environment "$pid" || true)"
+    [[ "$(sed '/^$/d' <<< "$selected" | wc -l)" -eq 3 ]] || continue
+
+    fingerprint="$(printf '%s' "$selected" | sha256sum | cut -d' ' -f1)"
+    if [[ -z "${representative_pid[$fingerprint]:-}" ]]; then
+      representative_pid["$fingerprint"]="$pid"
+      fingerprints+=("$fingerprint")
+    fi
+  done
+
+  case "${#fingerprints[@]}" in
+    0)
+      die "credenciais ausentes; exporte ${URL_VAR}, ${USER_VAR} e ${PASSWORD_VAR}"
+      ;;
+    1)
+      pid="${representative_pid[${fingerprints[0]}]}"
+      ;;
+    *)
+      die "mais de um conjunto de credenciais encontrado em processos locais; exporte explicitamente as três variáveis CLICKHOUSE_DATASOURCE_*"
+      ;;
+  esac
+
+  clickhouse_jdbc_url="$(process_environment_value "$pid" "$URL_VAR")"
+  clickhouse_username="$(process_environment_value "$pid" "$USER_VAR")"
+  clickhouse_password="$(process_environment_value "$pid" "$PASSWORD_VAR")"
+  [[ -n "$clickhouse_jdbc_url" && -n "$clickhouse_username" && -n "$clickhouse_password" ]] \
+    || die "o processo selecionado perdeu a configuração durante a descoberta; tente novamente"
+  credential_source="processo local"
+}
+
+resolve_credentials() {
+  load_current_environment || load_process_environment
+}
+
+resolve_endpoint() {
+  local location without_query authority database scheme normalized_url
+
+  [[ "$clickhouse_jdbc_url" == jdbc:clickhouse://* ]] \
+    || die "CLICKHOUSE_DATASOURCE_URL não usa o formato jdbc:clickhouse://"
+
+  location="${clickhouse_jdbc_url#jdbc:clickhouse://}"
+  without_query="${location%%\?*}"
+  authority="${without_query%%/*}"
+  [[ -n "$authority" ]] || die "servidor ClickHouse ausente na URL JDBC"
+
+  if [[ "$without_query" == */* ]]; then
+    database="${without_query#*/}"
+    if [[ -n "$database" ]]; then
+      [[ "$database" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+        || die "banco inválido na URL JDBC: $database"
+      clickhouse_database="$database"
+    fi
+  fi
+
+  normalized_url="${clickhouse_jdbc_url,,}"
+  if [[ "$normalized_url" == *"ssl=true"* || "$authority" == *":8443" ]]; then
+    scheme="https"
+  else
+    scheme="http"
+  fi
+  clickhouse_endpoint="${scheme}://${authority}/"
+}
+
+escape_curl_config_value() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '%s' "$value"
+}
+
+prepare_credentials() {
+  local escaped_user escaped_password
+  umask 077
+  credential_file="$(mktemp /tmp/aura-clickhouse-curl.XXXXXX)"
+  escaped_user="$(escape_curl_config_value "$clickhouse_username")"
+  escaped_password="$(escape_curl_config_value "$clickhouse_password")"
+  printf 'user = "%s:%s"\n' "$escaped_user" "$escaped_password" > "$credential_file"
+}
+
+cleanup() {
+  if [[ -n "$credential_file" && -f "$credential_file" ]]; then
+    rm -f -- "$credential_file"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+timeout_seconds() {
+  local value="${AURA_CLICKHOUSE_TIMEOUT_SECONDS:-$DEFAULT_TIMEOUT_SECONDS}"
+  [[ "$value" =~ ^[1-9][0-9]*$ && "$value" -le 300 ]] \
+    || die "AURA_CLICKHOUSE_TIMEOUT_SECONDS deve ser inteiro entre 1 e 300"
+  printf '%s' "$value"
+}
+
+run_query() {
+  local sql="$1"
+  local timeout
+  [[ -n "${sql//[[:space:]]/}" ]] || die "consulta SQL vazia"
+  timeout="$(timeout_seconds)"
+
+  printf '%s' "$sql" | curl \
+    --silent \
+    --show-error \
+    --fail-with-body \
+    --max-time "$timeout" \
+    --config "$credential_file" \
+    --header 'Content-Type: text/plain; charset=utf-8' \
+    --data-binary @- \
+    "${clickhouse_endpoint}?database=${clickhouse_database}&readonly=2&max_execution_time=${DEFAULT_EXECUTION_SECONDS}"
+}
+
+validate_identifier() {
+  [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$ ]] \
+    || die "identificador inválido: $1"
+}
+
+validate_term() {
+  [[ "$1" =~ ^[A-Za-z0-9_]+$ ]] || die "termo inválido: $1"
+}
+
+main() {
+  local command="${1:-}"
+  local argument="${2:-}"
+  local sql database term
+
+  [[ -n "$command" ]] || { usage >&2; exit 1; }
+  [[ "$command" == help || "$command" == --help || "$command" == -h ]] && { usage; exit 0; }
+
+  resolve_credentials
+  resolve_endpoint
+  prepare_credentials
+
+  case "$command" in
+    ping)
+      run_query "SELECT version() AS version, timezone() AS timezone, now() AS server_now FORMAT TSVWithNames"
+      ;;
+    info)
+      printf 'credential_source\t%s\n' "$credential_source"
+      printf 'transport\t%s\n' "${clickhouse_endpoint%%://*}"
+      printf 'default_database\t%s\n' "$clickhouse_database"
+      run_query "SELECT version() AS version, timezone() AS timezone, now() AS server_now FORMAT TSVWithNames"
+      ;;
+    databases)
+      run_query "SHOW DATABASES FORMAT TSVWithNames"
+      ;;
+    tables)
+      database="${argument:-analytics}"
+      validate_identifier "$database"
+      [[ "$database" != *.* ]] || die "informe somente o nome do banco"
+      run_query "SHOW TABLES FROM ${database} FORMAT TSVWithNames"
+      ;;
+    describe)
+      [[ -n "$argument" ]] || die "informe banco.tabela"
+      validate_identifier "$argument"
+      run_query "DESCRIBE TABLE ${argument} FORMAT TSVWithNames"
+      ;;
+    show-create)
+      [[ -n "$argument" ]] || die "informe banco.tabela"
+      validate_identifier "$argument"
+      run_query "SHOW CREATE TABLE ${argument} FORMAT TSVRaw"
+      ;;
+    columns)
+      [[ -n "$argument" ]] || die "informe o termo da coluna"
+      validate_term "$argument"
+      term="$argument"
+      sql="SELECT database, table, name, type FROM system.columns WHERE database NOT IN ('system','information_schema','INFORMATION_SCHEMA') AND positionCaseInsensitive(name, '${term}') > 0 ORDER BY database, table, position FORMAT TSVWithNames"
+      run_query "$sql"
+      ;;
+    query)
+      if [[ -n "$argument" ]]; then
+        [[ -f "$argument" ]] || die "arquivo SQL não encontrado: $argument"
+        sql="$(< "$argument")"
+      else
+        [[ ! -t 0 ]] || die "envie a consulta por stdin ou informe um arquivo SQL"
+        sql="$(cat)"
+      fi
+      run_query "$sql"
+      ;;
+    *)
+      usage >&2
+      die "comando desconhecido: $command"
+      ;;
+  esac
+}
+
+main "$@"

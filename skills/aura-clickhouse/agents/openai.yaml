@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aura ClickHouse"
+  short_description: "Consultas seguras no ClickHouse do Aura"
+  default_prompt: "Use $aura-clickhouse para consultar o ClickHouse do Aura com segurança."

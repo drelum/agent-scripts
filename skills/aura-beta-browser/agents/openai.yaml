@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aura Beta Browser"
+  short_description: "Testes rápidos e interação no Aura Beta"
+  default_prompt: "Use $aura-beta-browser para testar rapidamente este fluxo no Aura Beta com agent-browser."
