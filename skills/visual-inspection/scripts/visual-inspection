@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import os
 import shlex
@@ -12,10 +11,10 @@ from datetime import datetime
 from pathlib import Path
 
 from visual_inspection_lib.contract import (
-    REPORT_SCHEMA,
     VisualInspectionError,
     extract_report,
     inspection_prompt,
+    render_report,
     validate_context,
     validate_evidence,
 )
@@ -24,6 +23,7 @@ from visual_inspection_lib.engine import (
     CODEX_REASONING_EFFORT,
     DEFAULT_HEARTBEAT_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
+    MAX_TIMEOUT_SECONDS,
     SAO_PAULO,
     WorkerRun,
     close_browser_session,
@@ -47,10 +47,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--max-context-kb", type=int, default=1024)
     parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use Codex Fast service tier without changing the fixed model or reasoning effort.",
+    )
+    parser.add_argument(
         "--timeout-seconds",
-        type=positive_seconds,
+        type=worker_timeout_seconds,
         default=DEFAULT_TIMEOUT_SECONDS,
-        help="Maximum worker runtime before a blocked result (default: 900).",
+        help="Maximum worker runtime before a blocked result (default and ceiling: 300).",
     )
     parser.add_argument(
         "--heartbeat-seconds",
@@ -73,6 +78,15 @@ def positive_seconds(value: str) -> float:
         raise argparse.ArgumentTypeError("must be a number greater than zero") from error
     if not math.isfinite(seconds) or seconds <= 0:
         raise argparse.ArgumentTypeError("must be greater than zero")
+    return seconds
+
+
+def worker_timeout_seconds(value: str) -> float:
+    seconds = positive_seconds(value)
+    if seconds > MAX_TIMEOUT_SECONDS:
+        raise argparse.ArgumentTypeError(
+            f"must be at most {MAX_TIMEOUT_SECONDS:g} seconds"
+        )
     return seconds
 
 
@@ -100,6 +114,10 @@ def blocked_report(
     return {
         "status": "blocked",
         "summary": summary,
+        "preflight": {
+            "status": "blocked",
+            "evidence": limitation,
+        },
         "criteria": [
             {
                 "criterion": criterion,
@@ -123,17 +141,26 @@ def main() -> int:
         url = validate_url(args.url)
         if args.dry_run:
             print(
-                json.dumps(
-                    {
-                        "model": CODEX_MODEL,
-                        "reasoning_effort": CODEX_REASONING_EFFORT,
-                        "repository": str(repository),
-                        "url": url,
-                        "timeout_seconds": args.timeout_seconds,
-                        "heartbeat_seconds": args.heartbeat_seconds,
-                        "command": command_preview(repository),
-                    },
-                    indent=2,
+                "\n".join(
+                    [
+                        "Status: DRY-RUN",
+                        "",
+                        "# Execução",
+                        "",
+                        f"- Modelo: `{CODEX_MODEL}`",
+                        f"- Reasoning: `{CODEX_REASONING_EFFORT}`",
+                        f"- Tier: `{'fast' if args.fast else 'default'}`",
+                        f"- Repositório: `{repository}`",
+                        f"- URL: {url}",
+                        f"- Timeout: {args.timeout_seconds:g}s",
+                        f"- Heartbeat: {args.heartbeat_seconds:g}s",
+                        "",
+                        "# Comando",
+                        "",
+                        "```bash",
+                        shlex.join(command_preview(repository, args.fast)),
+                        "```",
+                    ]
                 )
             )
             return 0
@@ -155,9 +182,16 @@ def main() -> int:
             worker_run = run_worker(
                 repository,
                 evidence_dir,
-                inspection_prompt(context, repository, url, session, evidence_dir),
-                REPORT_SCHEMA,
+                inspection_prompt(
+                    context,
+                    repository,
+                    url,
+                    session,
+                    evidence_dir,
+                    timeout_seconds=args.timeout_seconds,
+                ),
                 session,
+                fast=args.fast,
                 timeout_seconds=args.timeout_seconds,
                 heartbeat_seconds=args.heartbeat_seconds,
                 progress=progress,
@@ -204,8 +238,8 @@ def main() -> int:
             except VisualInspectionError as error:
                 preserve_partial_artifacts = True
                 report = blocked_report(
-                    "Visual inspection worker returned an invalid report or evidence set.",
-                    "Structured worker report",
+                    "Visual inspection worker returned an invalid Markdown report or evidence set.",
+                    "Markdown worker report",
                     str(error),
                 )
         if cleanup_error:
@@ -233,29 +267,32 @@ def main() -> int:
         duration_seconds = (
             worker_run.duration_seconds if worker_run else fallback_duration_seconds
         )
-        result = {
-            "model": CODEX_MODEL,
-            "reasoning_effort": CODEX_REASONING_EFFORT,
-            "repository": str(repository),
-            "url": url,
-            "session": session,
-            "evidence_dir": str(evidence_dir),
-            "started_at": started_at,
-            "finished_at": finished_at,
-            "duration_seconds": duration_seconds,
-            "timeout_seconds": args.timeout_seconds,
-            "heartbeat_seconds": args.heartbeat_seconds,
-            "evidence_review_required": bool(report["evidence_paths"]),
-            "preserved_artifact_paths": (
-                discover_preserved_artifacts(evidence_dir)
-                if preserve_partial_artifacts
-                else []
-            ),
-            **report,
+        report_file = evidence_dir / "report.md"
+        preserved_artifacts = (
+            discover_preserved_artifacts(evidence_dir)
+            if preserve_partial_artifacts
+            else []
+        )
+        execution = {
+            "Modelo": f"`{CODEX_MODEL}`",
+            "Reasoning": f"`{CODEX_REASONING_EFFORT}`",
+            "Tier": f"`{'fast' if args.fast else 'default'}`",
+            "Repositório": f"`{repository}`",
+            "URL": url,
+            "Sessão": f"`{session}`",
+            "Diretório de evidências": f"`{evidence_dir}`",
+            "Início": started_at,
+            "Fim": finished_at,
+            "Duração": f"{duration_seconds:.3f}s",
+            "Relatório": f"`{report_file}`",
         }
-        report_file = evidence_dir / "report.json"
-        report_file.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-        print(json.dumps({**result, "report_file": str(report_file)}, indent=2))
+        if preserved_artifacts:
+            execution["Artefatos preservados"] = ", ".join(
+                f"`{path}`" for path in preserved_artifacts
+            )
+        rendered = render_report(report, execution=execution)
+        report_file.write_text(rendered, encoding="utf-8")
+        print(rendered, end="")
         progress(
             f"completed; status={report['status']}; duration={duration_seconds:.3f}s"
         )

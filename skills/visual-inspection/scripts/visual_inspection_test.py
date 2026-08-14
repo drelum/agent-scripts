@@ -16,6 +16,7 @@ from visual_inspection_lib.contract import (
     VisualInspectionError,
     extract_report,
     inspection_prompt,
+    render_report,
     validate_context,
     validate_evidence,
 )
@@ -32,6 +33,10 @@ def sample_report() -> dict[str, object]:
     return {
         "status": "pass",
         "summary": "The page rendered correctly.",
+        "preflight": {
+            "status": "pass",
+            "evidence": "Target URL and ready state confirmed.",
+        },
         "criteria": [
             {
                 "criterion": "Page is visible",
@@ -43,6 +48,12 @@ def sample_report() -> dict[str, object]:
         "evidence_paths": ["/tmp/evidence.png"],
         "limitations": [],
     }
+
+
+def execution_value(markdown: str, label: str) -> str:
+    prefix = f"- {label}: "
+    line = next(line for line in markdown.splitlines() if line.startswith(prefix))
+    return line.removeprefix(prefix).strip().strip("`")
 
 
 class VisualInspectionCase(unittest.TestCase):
@@ -64,11 +75,45 @@ class VisualInspectionCase(unittest.TestCase):
         )
         self.assertIn("complete task handoff", prompt)
         self.assertIn(str(self.repo), prompt)
-        self.assertIn("Read source, tests", prompt)
-        self.assertIn("agent-browser skills get core", prompt)
+        self.assertIn("Inspect repository context only when it helps", prompt)
+        self.assertIn("load only `agent-browser skills get core` once", prompt)
+        self.assertIn("do not load `--full` or `dogfood`", prompt)
         self.assertIn("Never use Playwright", prompt)
         self.assertIn("Do not edit", prompt)
         self.assertIn("never pass `--full`", prompt)
+        self.assertIn("set -euo pipefail", prompt)
+        self.assertIn("Use 1024x768 when the handoff does not explicitly request", prompt)
+        self.assertIn("State the actual viewport in the preflight evidence", prompt)
+        self.assertIn("agent-browser set viewport 1024 768", prompt)
+        self.assertNotIn("agent-browser set viewport 1440 900", prompt)
+        self.assertIn("agent-browser snapshot -i -c -d 3", prompt)
+        self.assertIn('find role button click --name "Submit"', prompt)
+        self.assertIn("retry once", prompt)
+        self.assertIn("try one visible candidate", prompt)
+        self.assertIn("report the criterion as BLOCKED", prompt)
+        self.assertIn("do not revisit completed criteria", prompt)
+        self.assertIn("total runtime budget is 300s", prompt)
+        self.assertIn("reserve the final 30s", prompt)
+        self.assertIn("Confirm only that the target opens", prompt)
+        self.assertIn("Keep domain-specific readiness", prompt)
+        self.assertNotIn("90-second", prompt)
+        self.assertNotIn("preflight.json", prompt)
+
+    def test_prompt_shell_quotes_url_with_query_control_characters(self) -> None:
+        prompt = inspection_prompt(
+            "Current user request: inspect filtered orders",
+            self.repo,
+            "https://example.com/orders?filter=active&tab=open",
+            "visual-test",
+            Path("/tmp/visual-test"),
+            timeout_seconds=300,
+        )
+        self.assertIn(
+            "agent-browser open 'https://example.com/orders?filter=active&tab=open'",
+            prompt,
+        )
+        self.assertIn("total runtime budget is 300s", prompt)
+        self.assertIn("reserve the final 30s", prompt)
 
     def test_invalid_context_is_rejected(self) -> None:
         with self.assertRaisesRegex(VisualInspectionError, "empty"):
@@ -115,7 +160,7 @@ class VisualInspectionCase(unittest.TestCase):
         self.assertTrue(session.startswith("visual-20260713-235958-"))
 
     def test_codex_invocation_is_full_access_in_repository_with_sol_medium(self) -> None:
-        command = codex_command(self.repo, Path("schema.json"), Path("report.json"))
+        command = codex_command(self.repo, Path("report.md"))
         self.assertEqual(command[command.index("--model") + 1], "gpt-5.6-sol")
         self.assertIn('model_reasoning_effort="medium"', command)
         self.assertIn("--ephemeral", command)
@@ -124,6 +169,19 @@ class VisualInspectionCase(unittest.TestCase):
         self.assertNotIn("--skip-git-repo-check", command)
         self.assertNotIn("--ignore-user-config", command)
         self.assertIn("--json", command)
+        self.assertNotIn("fast_mode", command)
+        self.assertNotIn('service_tier="fast"', command)
+
+    def test_codex_fast_is_explicit_and_keeps_sol_medium(self) -> None:
+        command = codex_command(
+            self.repo,
+            Path("report.md"),
+            fast=True,
+        )
+        self.assertEqual(command[command.index("--model") + 1], "gpt-5.6-sol")
+        self.assertIn('model_reasoning_effort="medium"', command)
+        self.assertEqual(command[command.index("--enable") + 1], "fast_mode")
+        self.assertIn('service_tier="fast"', command)
 
     def test_worker_environment_is_inherited(self) -> None:
         inherited = worker_env(
@@ -143,7 +201,7 @@ class VisualInspectionCase(unittest.TestCase):
             "/tmp/visual-test",
         )
 
-    def test_missing_executables_return_structured_errors(self) -> None:
+    def test_missing_executables_return_clear_errors(self) -> None:
         evidence_dir = self.root / "missing-tools"
         evidence_dir.mkdir()
         with patch(
@@ -151,9 +209,23 @@ class VisualInspectionCase(unittest.TestCase):
             side_effect=FileNotFoundError("codex"),
         ):
             with self.assertRaisesRegex(VisualInspectionError, "cannot launch Codex"):
-                run_worker(self.repo, evidence_dir, "prompt", {}, "visual-test")
+                run_worker(self.repo, evidence_dir, "prompt", "visual-test")
             cleanup = close_browser_session("visual-test", evidence_dir)
         self.assertIn("cannot launch agent-browser cleanup", cleanup or "")
+
+    def test_worker_rejects_timeout_above_five_minutes(self) -> None:
+        evidence_dir = self.root / "timeout-ceiling"
+        evidence_dir.mkdir()
+        with self.assertRaisesRegex(
+            VisualInspectionError, "must be at most 300 seconds"
+        ):
+            run_worker(
+                self.repo,
+                evidence_dir,
+                "prompt",
+                "visual-test",
+                timeout_seconds=301,
+            )
 
     def test_browser_cleanup_has_a_bounded_timeout(self) -> None:
         evidence_dir = self.root / "cleanup-timeout"
@@ -169,12 +241,59 @@ class VisualInspectionCase(unittest.TestCase):
             )
         self.assertEqual(cleanup, "agent-browser cleanup timed out after 0.1s")
 
-    def test_extracts_and_checks_structured_report(self) -> None:
+    def test_extracts_and_checks_markdown_report(self) -> None:
         expected = sample_report()
-        self.assertEqual(extract_report(json.dumps(expected)), expected)
+        self.assertEqual(extract_report(render_report(expected)), expected)
         expected["evidence_paths"] = []
-        with self.assertRaisesRegex(VisualInspectionError, "must have evidence"):
-            extract_report(json.dumps(expected))
+        with self.assertRaisesRegex(VisualInspectionError, "must cite evidence"):
+            extract_report(render_report(expected))
+
+    def test_pass_accepts_only_low_findings(self) -> None:
+        report = sample_report()
+        report["findings"] = [
+            {
+                "severity": "low",
+                "title": "Local environment noise",
+                "details": "Open the page. Vite HMR websocket warning without product impact.",
+            }
+        ]
+        self.assertEqual(extract_report(render_report(report)), report)
+
+        for severity in ("medium", "high", "blocking"):
+            with self.subTest(severity=severity):
+                report["findings"][0]["severity"] = severity
+                with self.assertRaisesRegex(VisualInspectionError, "non-LOW finding"):
+                    extract_report(render_report(report))
+
+    def test_rejects_unstructured_finding_text_instead_of_losing_it(self) -> None:
+        markdown = render_report(sample_report()).replace(
+            "# Achados\n\nNenhum.",
+            "# Achados\n\n- HIGH: checkout is visibly broken",
+        )
+        with self.assertRaisesRegex(VisualInspectionError, "unexpected content"):
+            extract_report(markdown)
+
+    def test_report_requires_preflight(self) -> None:
+        markdown = render_report(sample_report()).replace("# Preflight", "# Preparação")
+        with self.assertRaisesRegex(VisualInspectionError, "missing sections: preflight"):
+            extract_report(markdown)
+
+    def test_blocked_preflight_requires_blocked_report(self) -> None:
+        report = sample_report()
+        report["preflight"] = {
+            "status": "blocked",
+            "evidence": "Required authentication did not complete.",
+        }
+        with self.assertRaisesRegex(
+            VisualInspectionError, "blocked preflight requires Status: BLOCKED"
+        ):
+            extract_report(render_report(report))
+
+    def test_preflight_requires_evidence(self) -> None:
+        report = sample_report()
+        report["preflight"]["evidence"] = ""
+        with self.assertRaisesRegex(VisualInspectionError, "observable evidence"):
+            extract_report(render_report(report))
 
     def test_dry_run_exposes_fixed_configuration(self) -> None:
         result = subprocess.run(
@@ -193,12 +312,55 @@ class VisualInspectionCase(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        output = json.loads(result.stdout)
-        self.assertEqual(output["model"], "gpt-5.6-sol")
-        self.assertEqual(output["reasoning_effort"], "medium")
-        self.assertEqual(output["timeout_seconds"], 900)
-        self.assertEqual(output["heartbeat_seconds"], 30)
-        self.assertEqual(output["command"][output["command"].index("--cd") + 1], str(self.repo))
+        self.assertIn("Status: DRY-RUN", result.stdout)
+        self.assertIn("- Modelo: `gpt-5.6-sol`", result.stdout)
+        self.assertIn("- Reasoning: `medium`", result.stdout)
+        self.assertIn("- Tier: `default`", result.stdout)
+        self.assertIn("- Timeout: 300s", result.stdout)
+        self.assertIn(f"--cd {self.repo}", result.stdout)
+
+    def test_timeout_above_five_minutes_is_rejected(self) -> None:
+        result = subprocess.run(
+            [
+                str(Path(__file__).with_name("visual-inspection")),
+                "--dry-run",
+                "--timeout-seconds",
+                "301",
+                "--repo",
+                str(self.repo),
+                "--url",
+                "https://example.com",
+            ],
+            input="Current user request: inspect the page",
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("must be at most 300 seconds", result.stderr)
+
+    def test_dry_run_exposes_fast_without_changing_model_or_reasoning(self) -> None:
+        result = subprocess.run(
+            [
+                str(Path(__file__).with_name("visual-inspection")),
+                "--dry-run",
+                "--fast",
+                "--repo",
+                str(self.repo),
+                "--url",
+                "https://example.com",
+            ],
+            input="Current user request: inspect the page",
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("- Tier: `fast`", result.stdout)
+        self.assertIn("--enable fast_mode", result.stdout)
+        self.assertIn("service_tier=\"fast\"", result.stdout)
 
     def test_runner_passes_repository_environment_and_main_context(self) -> None:
         fake_bin = self.root / "fake-bin"
@@ -221,11 +383,28 @@ base.joinpath('prompt.txt').write_text(sys.stdin.read())
 output = pathlib.Path(args[args.index('--output-last-message') + 1])
 evidence = pathlib.Path(os.environ['AGENT_BROWSER_SCREENSHOT_DIR']) / 'evidence.png'
 evidence.write_bytes(b'png')
-output.write_text(json.dumps({
-  'status': 'pass', 'summary': 'Visible',
-  'criteria': [{'criterion': 'Visible', 'status': 'pass', 'evidence': 'Screenshot'}],
-  'findings': [], 'evidence_paths': [str(evidence)], 'limitations': []
-}))
+output.write_text(f'''Status: PASS
+
+# Resumo
+Visible
+
+# Preflight
+Status: PASS
+Ready
+
+# Critérios
+## Visible — PASS
+Screenshot
+
+# Achados
+Nenhum.
+
+# Limitações
+Nenhuma.
+
+# Evidências
+- {evidence}
+''')
 """,
             encoding="utf-8",
         )
@@ -256,24 +435,26 @@ output.write_text(json.dumps({
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        output = json.loads(result.stdout)
+        output = extract_report(result.stdout)
         captured = json.loads(capture.read_text(encoding="utf-8"))
         prompt = prompt_file.read_text(encoding="utf-8")
         self.assertEqual(captured["cwd"], str(self.repo))
-        self.assertEqual(captured["session"], output["session"])
+        self.assertEqual(captured["session"], execution_value(result.stdout, "Sessão"))
         self.assertEqual(captured["custom_context"], "available")
         self.assertIn(handoff, prompt)
         self.assertIn(str(self.repo), prompt)
-        self.assertTrue(output["evidence_review_required"])
         self.assertEqual(output["status"], "blocked")
         self.assertEqual(output["criteria"][-1]["status"], "blocked")
         self.assertEqual(output["criteria"][-1]["criterion"], "Browser session cleanup")
         self.assertIn("cleanup failed", output["limitations"][0])
         self.assertIn("visual-inspection [00:00] worker started", result.stderr)
         self.assertIn("tail -n 200 -f '", result.stderr)
-        self.assertRegex(output["started_at"], r"-03:00$")
-        self.assertGreaterEqual(output["duration_seconds"], 0)
-        self.assertEqual(stat.S_IMODE(Path(output["report_file"]).stat().st_mode), 0o600)
+        self.assertRegex(execution_value(result.stdout, "Início"), r"-03:00$")
+        self.assertGreaterEqual(
+            float(execution_value(result.stdout, "Duração").removesuffix("s")), 0
+        )
+        report_file = Path(execution_value(result.stdout, "Relatório"))
+        self.assertEqual(stat.S_IMODE(report_file.stat().st_mode), 0o600)
 
     def test_worker_streams_events_and_heartbeats_before_completion(self) -> None:
         fake_bin = self.root / "stream-bin"
@@ -287,11 +468,28 @@ sys.stdin.read()
 print(json.dumps({'type': 'thread.started', 'thread_id': 'test'}), flush=True)
 time.sleep(0.4)
 output = pathlib.Path(args[args.index('--output-last-message') + 1])
-output.write_text(json.dumps({
-  'status': 'blocked', 'summary': 'No browser needed',
-  'criteria': [{'criterion': 'Synthetic', 'status': 'blocked', 'evidence': 'Synthetic run'}],
-  'findings': [], 'evidence_paths': [], 'limitations': ['Synthetic run']
-}))
+output.write_text('''Status: BLOCKED
+
+# Resumo
+No browser needed
+
+# Preflight
+Status: BLOCKED
+Synthetic run
+
+# Critérios
+## Synthetic — BLOCKED
+Synthetic run
+
+# Achados
+Nenhum.
+
+# Limitações
+- Synthetic run
+
+# Evidências
+Nenhuma.
+''')
 print(json.dumps({'type': 'turn.completed'}), flush=True)
 """,
             encoding="utf-8",
@@ -308,7 +506,6 @@ print(json.dumps({'type': 'turn.completed'}), flush=True)
                     self.repo,
                     evidence_dir,
                     "complete handoff",
-                    {"type": "object", "additionalProperties": False},
                     "visual-stream",
                     timeout_seconds=2,
                     heartbeat_seconds=0.1,
@@ -338,7 +535,7 @@ print(json.dumps({'type': 'turn.completed'}), flush=True)
         self.assertTrue(any("heartbeat" in message for message in progress_messages))
         self.assertTrue(any("worker connected" in message for message in progress_messages))
 
-    def test_timeout_returns_blocked_json_and_preserves_partial_events(self) -> None:
+    def test_timeout_returns_blocked_markdown_and_preserves_partial_events(self) -> None:
         fake_bin = self.root / "timeout-bin"
         fake_bin.mkdir()
         fake_codex = fake_bin / "codex"
@@ -382,14 +579,16 @@ time.sleep(10)
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        output = json.loads(result.stdout)
+        output = extract_report(result.stdout)
         self.assertEqual(output["status"], "blocked")
-        self.assertEqual(output["timeout_seconds"], 0.3)
-        self.assertLess(output["duration_seconds"], 3)
+        self.assertEqual(output["preflight"]["status"], "blocked")
+        self.assertLess(
+            float(execution_value(result.stdout, "Duração").removesuffix("s")), 3
+        )
         self.assertIn("timed out after 0.3s", output["limitations"][0])
         self.assertIn("heartbeat", result.stderr)
         self.assertIn("timeout reached", result.stderr)
-        events = Path(output["evidence_dir"]) / "worker-events.jsonl"
+        events = Path(execution_value(result.stdout, "Diretório de evidências")) / "worker-events.jsonl"
         self.assertIn("thread.started", events.read_text(encoding="utf-8"))
 
     def test_timeout_kills_worker_descendants_that_ignore_sigterm(self) -> None:
@@ -434,9 +633,8 @@ time.sleep(10)
                 self.repo,
                 evidence_dir,
                 "complete handoff",
-                {"type": "object", "additionalProperties": False},
                 "visual-descendant",
-                timeout_seconds=0.3,
+                timeout_seconds=0.8,
                 heartbeat_seconds=0.1,
             )
 
@@ -452,7 +650,7 @@ time.sleep(10)
         with self.assertRaises(ProcessLookupError):
             os.kill(child_pid, 0)
 
-    def test_worker_failure_returns_blocked_json_without_replaying_raw_events(self) -> None:
+    def test_worker_failure_returns_blocked_markdown_without_replaying_raw_events(self) -> None:
         fake_bin = self.root / "failure-bin"
         fake_bin.mkdir()
         fake_codex = fake_bin / "codex"
@@ -499,12 +697,13 @@ raise SystemExit(7)
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        output = json.loads(result.stdout)
+        output = extract_report(result.stdout)
         self.assertEqual(output["status"], "blocked")
+        self.assertEqual(output["preflight"]["status"], "blocked")
         self.assertIn("failed with exit code 7", output["limitations"][0])
         self.assertNotIn("SECRET_COMMAND", result.stderr)
         self.assertNotIn("SECRET_COMMAND", result.stdout)
-        events = Path(output["evidence_dir"]) / "worker-events.jsonl"
+        events = Path(execution_value(result.stdout, "Diretório de evidências")) / "worker-events.jsonl"
         self.assertIn("SECRET_COMMAND", events.read_text(encoding="utf-8"))
 
     def test_invalid_pass_still_writes_final_report_and_lists_preserved_artifacts(self) -> None:
@@ -519,11 +718,28 @@ sys.stdin.read()
 evidence = pathlib.Path(os.environ['AGENT_BROWSER_SCREENSHOT_DIR']) / 'captured.png'
 evidence.write_bytes(b'png')
 output = pathlib.Path(args[args.index('--output-last-message') + 1])
-output.write_text(json.dumps({
-  'status': 'pass', 'summary': 'Captured but not linked',
-  'criteria': [{'criterion': 'Visible', 'status': 'pass', 'evidence': 'Captured'}],
-  'findings': [], 'evidence_paths': [], 'limitations': []
-}))
+output.write_text('''Status: PASS
+
+# Resumo
+Captured but not linked
+
+# Preflight
+Status: PASS
+Ready
+
+# Critérios
+## Visible — PASS
+Captured
+
+# Achados
+Nenhum.
+
+# Limitações
+Nenhuma.
+
+# Evidências
+Nenhuma.
+''')
 """,
             encoding="utf-8",
         )
@@ -554,16 +770,15 @@ output.write_text(json.dumps({
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        output = json.loads(result.stdout)
+        output = extract_report(result.stdout)
         self.assertEqual(output["status"], "blocked")
-        self.assertIn("pass report must have evidence", output["limitations"][0])
-        self.assertEqual(
-            output["preserved_artifact_paths"],
-            [str(Path(output["evidence_dir"]) / "captured.png")],
-        )
-        report_file = Path(output["report_file"])
+        self.assertEqual(output["preflight"]["status"], "blocked")
+        self.assertIn("PASS report must cite evidence", output["limitations"][0])
+        evidence_dir = Path(execution_value(result.stdout, "Diretório de evidências"))
+        self.assertIn(str(evidence_dir / "captured.png"), result.stdout)
+        report_file = Path(execution_value(result.stdout, "Relatório"))
         self.assertTrue(report_file.is_file())
-        self.assertEqual(json.loads(report_file.read_text(encoding="utf-8"))["status"], "blocked")
+        self.assertEqual(extract_report(report_file.read_text(encoding="utf-8"))["status"], "blocked")
 
 
 if __name__ == "__main__":

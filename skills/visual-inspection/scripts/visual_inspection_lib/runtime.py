@@ -10,7 +10,12 @@ from zoneinfo import ZoneInfo
 from .contract import VisualInspectionError
 
 
-OPERATIONAL_FILES = {"report.json", "worker-events.jsonl", "worker-stderr.log"}
+OPERATIONAL_FILES = {
+    "report.md",
+    "worker-report.md",
+    "worker-events.jsonl",
+    "worker-stderr.log",
+}
 SAO_PAULO = ZoneInfo("America/Sao_Paulo")
 
 
