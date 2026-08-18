@@ -34,9 +34,10 @@ Explicit targets:
 <skill-dir>/scripts/autoreview --mode local --engine codex
 <skill-dir>/scripts/autoreview --mode branch --base origin/main --engine claude
 <skill-dir>/scripts/autoreview --mode commit --commit HEAD --engine codex
+<skill-dir>/scripts/autoreview --mode local --path src/feature --path tests/feature.test.ts --engine codex
 ```
 
-2. Let the helper build a bounded review bundle. It must fail closed on sensitive paths, private keys, API keys, tokens, binary untracked files, or oversized input. Environment-file paths are allowed and screened by content like other files. Password assignments are not content-screened.
+2. Let the helper build a bounded review bundle. In a no-HEAD or multi-ticket checkout, repeat `--path <relative-file-or-directory>` to include only the frozen scope. The helper validates the complete provider prompt before launch and fails closed on sensitive paths, private keys, API keys, tokens, binary untracked files, or oversized input. Environment-file paths are allowed and screened by content like other files. Password assignments are not content-screened.
 3. Read the Markdown report. The helper validates structured engine output internally, then renders the human-facing result. Confirm each finding by inspecting source, tests, and dependency contracts.
 4. Accept only concrete defects introduced or exposed by the reviewed change. Reject style-only, speculative, pre-existing, or overengineered findings.
 5. Fix accepted findings within the frozen task scope, rerun relevant tests, then rerun the same review engine.

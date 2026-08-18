@@ -45,7 +45,7 @@ def inspection_prompt(
     url: str,
     session: str,
     evidence_dir: Path,
-    timeout_seconds: float = 300,
+    timeout_seconds: float = 420,
 ) -> str:
     quoted_url = shlex.quote(url)
     finalization_seconds = min(90.0, timeout_seconds * 0.1)

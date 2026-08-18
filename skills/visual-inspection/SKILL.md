@@ -26,7 +26,7 @@ For an authenticated target, the caller may supply a short-lived token through a
 Before invoking from Codex, preserve the calling client's tier: use explicit session/status metadata when available; otherwise read the persisted `service_tier` selected by `/fast` in the active Codex config. Add `--fast` when that value is `fast`, or when the user explicitly requests Fast. Omit it when Fast is disabled or cannot be established. From Claude, omit it unless the user explicitly requests a Codex Fast inspection.
 
 Use a safe file-editing mechanism for the temporary handoff. Do not interpolate user text into shell quoting.
-The total timeout is at most 5 minutes. Use `--timeout-seconds <seconds>` only to lower it; do not wrap the runner in an external timeout.
+The total timeout is at most 7 minutes. Use `--timeout-seconds <seconds>` only to lower it; do not wrap the runner in an external timeout.
 
 Keep the run concise:
 

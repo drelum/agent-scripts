@@ -55,7 +55,7 @@ def parse_args() -> argparse.Namespace:
         "--timeout-seconds",
         type=worker_timeout_seconds,
         default=DEFAULT_TIMEOUT_SECONDS,
-        help="Maximum worker runtime before a blocked result (default and ceiling: 300).",
+        help="Maximum worker runtime before a blocked result (default and ceiling: 420).",
     )
     parser.add_argument(
         "--heartbeat-seconds",

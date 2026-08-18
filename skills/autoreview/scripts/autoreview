@@ -9,6 +9,7 @@ from pathlib import Path
 
 from autoreview_lib.bundle import BundleError, build_bundle
 from autoreview_lib.engines import (
+    CODEX_SAFE_PROMPT_CHARS,
     DEFAULT_HEARTBEAT_SECONDS,
     DEFAULT_OUTPUT_ROOT,
     DEFAULT_TIMEOUT_SECONDS,
@@ -16,8 +17,11 @@ from autoreview_lib.engines import (
     command_preview,
     review_prompt,
     run_engine,
+    validate_prompt_size,
 )
 from autoreview_lib.report import ReportError, extract_report, render_markdown
+
+DEFAULT_MAX_BUNDLE_KB = 960
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,6 +30,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=["auto", "local", "branch", "commit"], default="auto")
     parser.add_argument("--base")
     parser.add_argument("--commit", default="HEAD")
+    parser.add_argument(
+        "--path",
+        action="append",
+        default=[],
+        metavar="RELATIVE_PATH",
+        help="Limit review to a repository-relative file or directory; repeat as needed.",
+    )
     parser.add_argument(
         "--model",
         help="Optional engine model override; Codex defaults to gpt-5.6-sol, Claude to its CLI default.",
@@ -36,7 +47,7 @@ def parse_args() -> argparse.Namespace:
         help="Use Codex Fast service tier; valid only with --engine codex.",
     )
     parser.add_argument("--repo", type=Path, default=Path.cwd())
-    parser.add_argument("--max-bundle-kb", type=int, default=1024)
+    parser.add_argument("--max-bundle-kb", type=int, default=DEFAULT_MAX_BUNDLE_KB)
     parser.add_argument("--timeout-seconds", type=positive_seconds, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--heartbeat-seconds", type=positive_seconds, default=DEFAULT_HEARTBEAT_SECONDS)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
@@ -72,7 +83,10 @@ def main() -> int:
             base=args.base,
             commit=args.commit,
             max_bundle_bytes=args.max_bundle_kb * 1024,
+            paths=args.path,
         )
+        prompt = review_prompt(bundle.label, bundle.content)
+        prompt_size = validate_prompt_size(args.engine, prompt)
         if args.dry_run:
             preview = command_preview(args.engine, repo, args.model, args.fast)
             print(
@@ -84,6 +98,11 @@ def main() -> int:
                         "",
                         f"- Alvo: {bundle.label}",
                         f"- Bundle: {len(bundle.content.encode('utf-8'))} bytes",
+                        (
+                            f"- Prompt: {prompt_size} / {CODEX_SAFE_PROMPT_CHARS} caracteres seguros"
+                            if args.engine == "codex"
+                            else f"- Prompt: {prompt_size} caracteres"
+                        ),
                         "",
                         "# Comando",
                         "",
@@ -97,7 +116,7 @@ def main() -> int:
         run = run_engine(
             args.engine,
             repo,
-            review_prompt(bundle.label, bundle.content),
+            prompt,
             args.model,
             fast=args.fast,
             timeout_seconds=args.timeout_seconds,

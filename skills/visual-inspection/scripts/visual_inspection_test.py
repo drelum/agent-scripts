@@ -92,8 +92,8 @@ class VisualInspectionCase(unittest.TestCase):
         self.assertIn("try one visible candidate", prompt)
         self.assertIn("report the criterion as BLOCKED", prompt)
         self.assertIn("do not revisit completed criteria", prompt)
-        self.assertIn("total runtime budget is 300s", prompt)
-        self.assertIn("reserve the final 30s", prompt)
+        self.assertIn("total runtime budget is 420s", prompt)
+        self.assertIn("reserve the final 42s", prompt)
         self.assertIn("Confirm only that the target opens", prompt)
         self.assertIn("Keep domain-specific readiness", prompt)
         self.assertNotIn("90-second", prompt)
@@ -106,14 +106,14 @@ class VisualInspectionCase(unittest.TestCase):
             "https://example.com/orders?filter=active&tab=open",
             "visual-test",
             Path("/tmp/visual-test"),
-            timeout_seconds=300,
+            timeout_seconds=420,
         )
         self.assertIn(
             "agent-browser open 'https://example.com/orders?filter=active&tab=open'",
             prompt,
         )
-        self.assertIn("total runtime budget is 300s", prompt)
-        self.assertIn("reserve the final 30s", prompt)
+        self.assertIn("total runtime budget is 420s", prompt)
+        self.assertIn("reserve the final 42s", prompt)
 
     def test_invalid_context_is_rejected(self) -> None:
         with self.assertRaisesRegex(VisualInspectionError, "empty"):
@@ -213,18 +213,18 @@ class VisualInspectionCase(unittest.TestCase):
             cleanup = close_browser_session("visual-test", evidence_dir)
         self.assertIn("cannot launch agent-browser cleanup", cleanup or "")
 
-    def test_worker_rejects_timeout_above_five_minutes(self) -> None:
+    def test_worker_rejects_timeout_above_seven_minutes(self) -> None:
         evidence_dir = self.root / "timeout-ceiling"
         evidence_dir.mkdir()
         with self.assertRaisesRegex(
-            VisualInspectionError, "must be at most 300 seconds"
+            VisualInspectionError, "must be at most 420 seconds"
         ):
             run_worker(
                 self.repo,
                 evidence_dir,
                 "prompt",
                 "visual-test",
-                timeout_seconds=301,
+                timeout_seconds=421,
             )
 
     def test_browser_cleanup_has_a_bounded_timeout(self) -> None:
@@ -316,16 +316,16 @@ class VisualInspectionCase(unittest.TestCase):
         self.assertIn("- Modelo: `gpt-5.6-sol`", result.stdout)
         self.assertIn("- Reasoning: `medium`", result.stdout)
         self.assertIn("- Tier: `default`", result.stdout)
-        self.assertIn("- Timeout: 300s", result.stdout)
+        self.assertIn("- Timeout: 420s", result.stdout)
         self.assertIn(f"--cd {self.repo}", result.stdout)
 
-    def test_timeout_above_five_minutes_is_rejected(self) -> None:
+    def test_timeout_above_seven_minutes_is_rejected(self) -> None:
         result = subprocess.run(
             [
                 str(Path(__file__).with_name("visual-inspection")),
                 "--dry-run",
                 "--timeout-seconds",
-                "301",
+                "421",
                 "--repo",
                 str(self.repo),
                 "--url",
@@ -338,7 +338,7 @@ class VisualInspectionCase(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 2)
-        self.assertIn("must be at most 300 seconds", result.stderr)
+        self.assertIn("must be at most 420 seconds", result.stderr)
 
     def test_dry_run_exposes_fast_without_changing_model_or_reasoning(self) -> None:
         result = subprocess.run(
