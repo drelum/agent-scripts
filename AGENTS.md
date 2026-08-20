@@ -24,6 +24,7 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Keep notes short; update docs on behavior/API changes (no ship w/o docs).
 - Add `read_when` hints on cross-cutting docs.
 - Models: latest/current only; verify availability in the active CLI/provider before selecting or pinning; avoid static allowlists that drift.
+- Modelos LLM: para investigar capacidades e preços atuais, consultar sem API key `curl -sS https://openrouter.ai/api/v1/models`; docs: https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties.md.
 
 ## Google Workspace / GWS
 - CLI local: `gws`.
