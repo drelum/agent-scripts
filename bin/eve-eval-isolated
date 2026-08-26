@@ -1,0 +1,325 @@
+#!/usr/bin/env node
+
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import {
+  mkdir,
+  readdir,
+  readFile,
+  readlink,
+  rename,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
+import { constants as osConstants } from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const WORKFLOW_DATA_RELATIVE_PATH = '.eve/.workflow-data';
+const RUN_ARCHIVES_RELATIVE_PATH = '.eve/eval-isolated-runs';
+const LOCK_RELATIVE_PATH = '.eve/eval-isolation.lock';
+const TIME_ZONE = 'America/Sao_Paulo';
+const LOCAL_WORKFLOW_TIMEOUT_MS = '300000';
+
+function usage() {
+  console.log(`Executa uma bateria local do Eve Eval sobre um workflow store novo.
+
+Uso:
+  eve-eval-isolated [argumentos do eve eval]
+
+O comando deve ser executado na raiz do projeto Eve. O estado anterior e o estado
+gerado são movidos para .eve/eval-isolated-runs/; .eve/m permanece compartilhado.`);
+}
+
+function localTimestamp(date = new Date()) {
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: TIME_ZONE,
+    dateStyle: 'short',
+    timeStyle: 'long',
+    hourCycle: 'h23',
+  }).format(date);
+}
+
+function runId(date = new Date()) {
+  const local = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  })
+    .format(date)
+    .replaceAll(/[-: ]/g, '');
+  return `${local}-${randomUUID().slice(0, 8)}`;
+}
+
+async function exists(target) {
+  try {
+    await stat(target);
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+export async function archiveWorkflowStore(appRoot, runRoot, phase) {
+  const source = path.join(appRoot, WORKFLOW_DATA_RELATIVE_PATH);
+  if (!(await exists(source))) return null;
+  const destination = path.join(runRoot, phase);
+  await mkdir(path.dirname(destination), { recursive: true });
+  await rename(source, destination);
+  return destination;
+}
+
+export async function archiveOwnedRunWorkflowStore(
+  appRoot,
+  runRoot,
+  ownsWorkflowStore,
+) {
+  if (!ownsWorkflowStore) return null;
+  return archiveWorkflowStore(appRoot, runRoot, 'run-workflow-data');
+}
+
+export async function acquireLock(appRoot) {
+  if (process.platform !== 'linux') {
+    throw new Error('O lock seguro de Eve Eval requer Linux ou WSL.');
+  }
+  const lockPath = path.join(appRoot, LOCK_RELATIVE_PATH);
+  await mkdir(path.dirname(lockPath), { recursive: true });
+  const child = spawn(
+    'flock',
+    [
+      '--exclusive',
+      '--nonblock',
+      lockPath,
+      'sh',
+      '-c',
+      "printf 'ready\\n'; cat >/dev/null",
+    ],
+    { stdio: ['pipe', 'pipe', 'inherit'] },
+  );
+  await new Promise((resolve, reject) => {
+    let output = '';
+    let settled = false;
+    const rejectOnce = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    child.once('error', (error) => {
+      rejectOnce(
+        error.code === 'ENOENT'
+          ? new Error('O executável flock não está disponível; instale util-linux.')
+          : error,
+      );
+    });
+    child.once('exit', (code) => {
+      rejectOnce(
+        code === 1
+          ? new Error('Já existe uma bateria isolada ativa neste projeto.')
+          : new Error(`O processo de lock terminou antes da aquisição (código ${code ?? 1}).`),
+      );
+    });
+    child.stdout.on('data', (chunk) => {
+      output += chunk.toString('utf8');
+      if (settled || !output.includes('\n')) return;
+      settled = true;
+      resolve();
+    });
+  });
+  const metadata = `${JSON.stringify({
+    pid: process.pid,
+    startedAt: localTimestamp(),
+    timeZone: TIME_ZONE,
+  })}\n`;
+  const lock = { child, lockPath, metadata };
+  try {
+    await writeFile(lockPath, metadata, 'utf8');
+    return lock;
+  } catch (error) {
+    await releaseLock(lock);
+    throw error;
+  }
+}
+
+export async function releaseLock(lock) {
+  if (lock.child.exitCode === null && lock.child.signalCode === null) {
+    lock.child.stdin.end();
+    await new Promise((resolve) => lock.child.once('exit', resolve));
+  }
+  if (lock.child.exitCode !== 0) {
+    throw new Error(
+      `O processo de lock terminou inesperadamente (código ${lock.child.exitCode ?? 'sinal'}).`,
+    );
+  }
+}
+
+export function isCompetingEveCommand(command) {
+  return (
+    /(?:^|[\s/\\])eve(?:\.js)?\s+(?:dev|eval)(?:\s|$)/u.test(command) ||
+    command.includes('/eve/dist/src/cli/dev/local-server-child.js')
+  );
+}
+
+async function competingEveProcesses(appRoot) {
+  if (process.platform !== 'linux') return [];
+  const entries = await readdir('/proc', { withFileTypes: true });
+  const found = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) continue;
+    const pid = Number(entry.name);
+    if (pid === process.pid || pid === process.ppid) continue;
+    const processRoot = path.join('/proc', entry.name);
+    try {
+      const cwd = await readlink(path.join(processRoot, 'cwd'));
+      if (cwd !== appRoot && !cwd.startsWith(`${appRoot}${path.sep}`)) continue;
+      const command = (await readFile(path.join(processRoot, 'cmdline')))
+        .toString('utf8')
+        .replaceAll('\0', ' ')
+        .trim();
+      if (isCompetingEveCommand(command)) found.push({ pid, command });
+    } catch {
+      // O processo pode terminar entre a listagem e a leitura de /proc.
+    }
+  }
+  return found;
+}
+
+export function signalNumber(signal) {
+  return osConstants.signals[signal] ?? osConstants.signals.SIGTERM;
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  if (args.length === 1 && (args[0] === '--help' || args[0] === '-h')) {
+    usage();
+    return 0;
+  }
+
+  const appRoot = process.cwd();
+  const executable = path.join(appRoot, 'node_modules', '.bin', 'eve');
+  if (!(await exists(executable))) {
+    throw new Error(
+      `Eve local não encontrado em ${executable}. Execute na raiz de um projeto com eve instalado.`,
+    );
+  }
+
+  const id = runId();
+  const runRoot = path.join(appRoot, RUN_ARCHIVES_RELATIVE_PATH, id);
+  await mkdir(runRoot, { recursive: true });
+  const lock = await acquireLock(appRoot);
+  let exitCode = 1;
+  let receivedSignal = null;
+  let ownsWorkflowStore = false;
+  let preexistingArchive = null;
+  let runArchive = null;
+
+  try {
+    const competitors = await competingEveProcesses(appRoot);
+    if (competitors.length > 0) {
+      const details = competitors.map(({ pid, command }) => `${pid}: ${command}`).join('\n');
+      throw new Error(
+        `Outro runtime Eve está ativo neste projeto. Encerre-o antes da bateria isolada:\n${details}`,
+      );
+    }
+
+    preexistingArchive = await archiveWorkflowStore(
+      appRoot,
+      runRoot,
+      'preexisting-workflow-data',
+    );
+    if (preexistingArchive !== null) {
+      console.error(`Workflow store anterior arquivado em ${preexistingArchive}`);
+    }
+    ownsWorkflowStore = true;
+
+    const workflowHeadersTimeout =
+      process.env.WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS ?? LOCAL_WORKFLOW_TIMEOUT_MS;
+    const workflowBodyTimeout =
+      process.env.WORKFLOW_LOCAL_BODY_TIMEOUT_MS ?? LOCAL_WORKFLOW_TIMEOUT_MS;
+    const child = spawn(executable, ['eval', ...args], {
+      cwd: appRoot,
+      detached: process.platform !== 'win32',
+      env: {
+        ...process.env,
+        MSB_HOME: path.join(appRoot, '.eve', 'm'),
+        WORKFLOW_LOCAL_BODY_TIMEOUT_MS: workflowBodyTimeout,
+        WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS: workflowHeadersTimeout,
+      },
+      stdio: 'inherit',
+    });
+    const forwardSignal = (signal) => {
+      receivedSignal ??= signal;
+      if (child.pid === undefined) return;
+      try {
+        process.kill(process.platform === 'win32' ? child.pid : -child.pid, signal);
+      } catch (error) {
+        if (error.code !== 'ESRCH') throw error;
+      }
+    };
+    const handlers = new Map();
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+      const handler = () => forwardSignal(signal);
+      handlers.set(signal, handler);
+      process.on(signal, handler);
+    }
+    let outcome;
+    try {
+      outcome = await new Promise((resolve, reject) => {
+        child.once('error', reject);
+        child.once('exit', (code, signal) => resolve({ code, signal }));
+      });
+    } finally {
+      for (const [signal, handler] of handlers) process.off(signal, handler);
+    }
+    const terminalSignal = receivedSignal ?? outcome.signal;
+    receivedSignal = terminalSignal;
+    exitCode = terminalSignal === null ? (outcome.code ?? 1) : 128 + signalNumber(terminalSignal);
+  } finally {
+    try {
+      runArchive = await archiveOwnedRunWorkflowStore(appRoot, runRoot, ownsWorkflowStore);
+      await writeFile(
+        path.join(runRoot, 'metadata.json'),
+        `${JSON.stringify(
+          {
+            schemaVersion: '1.0',
+            timeZone: TIME_ZONE,
+            completedAt: localTimestamp(),
+            arguments: args,
+            exitCode,
+            signal: receivedSignal,
+            preexistingWorkflowStore: preexistingArchive,
+            runWorkflowStore: runArchive,
+            workflowTimeoutsMs: {
+              body: process.env.WORKFLOW_LOCAL_BODY_TIMEOUT_MS ?? LOCAL_WORKFLOW_TIMEOUT_MS,
+              headers:
+                process.env.WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS ?? LOCAL_WORKFLOW_TIMEOUT_MS,
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        'utf8',
+      );
+      await writeFile(path.join(runRoot, 'lock.json'), lock.metadata, 'utf8');
+    } finally {
+      await releaseLock(lock);
+    }
+    console.error(`Estado isolado da bateria: ${runRoot}`);
+  }
+  return exitCode;
+}
+
+const entrypoint = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : null;
+if (entrypoint === import.meta.url) {
+  try {
+    process.exitCode = await main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}

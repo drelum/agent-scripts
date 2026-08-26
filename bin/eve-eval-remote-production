@@ -1,0 +1,308 @@
+#!/usr/bin/env node
+
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const TIME_ZONE = 'America/Sao_Paulo';
+const LOCK_RELATIVE_PATH = '.eve/remote-production-eval.lock';
+const RUNS_RELATIVE_PATH = '.eve/remote-production-evals';
+
+function usage() {
+  console.log(`Executa um Eve Eval contra Production com identidade efêmera e pin de deployment.
+
+Uso:
+  eve-eval-remote-production --audience <audience> -- <comando com --url URL>
+
+Exemplo:
+  eve-eval-remote-production --audience urn:aitrus:service:meu-agente -- \
+    pnpm experiment:remote:runtime -- --url https://meu-agente.vercel.app`);
+}
+
+function localTimestamp(date = new Date()) {
+  return new Intl.DateTimeFormat('pt-BR', {
+    dateStyle: 'short',
+    timeStyle: 'medium',
+    timeZone: TIME_ZONE,
+  }).format(date);
+}
+
+export function parseRemoteProductionOptions(argv) {
+  const separator = argv.indexOf('--');
+  if (separator < 0) throw new Error('Separe as opções do executor e o comando com --.');
+  const runnerArgs = argv.slice(0, separator);
+  const command = argv.slice(separator + 1);
+  if (command.length === 0) throw new Error('O comando do eval é obrigatório.');
+
+  let audience = '';
+  for (let index = 0; index < runnerArgs.length; index += 1) {
+    const argument = runnerArgs[index];
+    if (argument !== '--audience') throw new Error(`Opção desconhecida: ${argument ?? ''}.`);
+    const value = runnerArgs[index + 1]?.trim();
+    if (!value || value.startsWith('--')) throw new Error('Valor ausente para --audience.');
+    audience = value;
+    index += 1;
+  }
+  if (!audience) throw new Error('--audience é obrigatório.');
+
+  const urls = [];
+  for (let index = 0; index < command.length; index += 1) {
+    if (command[index] !== '--url') continue;
+    const value = command[index + 1];
+    if (!value || value.startsWith('--')) throw new Error('Valor ausente para --url no comando.');
+    urls.push(value);
+    index += 1;
+  }
+  if (urls.length !== 1) {
+    throw new Error('O comando deve conter exatamente uma opção --url para o alvo produtivo.');
+  }
+  const targetUrl = new URL(urls[0]);
+  if (targetUrl.protocol !== 'https:') throw new Error('--url deve usar HTTPS.');
+
+  return { audience, command, targetUrl: targetUrl.toString() };
+}
+
+export function parseDeploymentInspection(output, expectedProjectName) {
+  const start = output.indexOf('{');
+  if (start < 0) throw new Error('A inspeção da Vercel não retornou JSON.');
+  const decoded = JSON.parse(output.slice(start));
+  if (
+    typeof decoded.id !== 'string'
+    || typeof decoded.name !== 'string'
+    || typeof decoded.url !== 'string'
+    || decoded.target !== 'production'
+    || decoded.readyState !== 'READY'
+  ) {
+    throw new Error('O alvo deve resolver para um deployment Production em estado READY.');
+  }
+  if (expectedProjectName && decoded.name !== expectedProjectName) {
+    throw new Error(
+      `O alvo pertence ao projeto Vercel ${decoded.name}, não ao projeto local ${expectedProjectName}.`,
+    );
+  }
+  return {
+    createdAt: typeof decoded.createdAt === 'number'
+      ? new Date(decoded.createdAt).toISOString()
+      : null,
+    id: decoded.id,
+    name: decoded.name,
+    readyState: decoded.readyState,
+    target: decoded.target,
+    url: `https://${decoded.url}`,
+  };
+}
+
+async function runCaptured(executable, args, cwd) {
+  return await new Promise((resolveResult, reject) => {
+    const child = spawn(executable, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on('data', (chunk) => stdout.push(chunk));
+    child.stderr.on('data', (chunk) => stderr.push(chunk));
+    child.on('error', reject);
+    child.on('close', (code, signal) => {
+      if (signal) return reject(new Error(`vercel inspect terminou pelo sinal ${signal}.`));
+      if (code !== 0) {
+        return reject(
+          new Error(`vercel inspect falhou: ${Buffer.concat(stderr).toString('utf8').trim()}`),
+        );
+      }
+      resolveResult(Buffer.concat(stdout).toString('utf8'));
+    });
+  });
+}
+
+async function inspectDeployment(appRoot, targetUrl) {
+  const project = JSON.parse(
+    await readFile(path.join(appRoot, '.vercel', 'project.json'), 'utf8'),
+  );
+  if (typeof project.projectName !== 'string' || !project.projectName.trim()) {
+    throw new Error('.vercel/project.json não identifica projectName.');
+  }
+  const output = await runCaptured(
+    'pnpm',
+    ['exec', 'vercel', 'inspect', targetUrl, '--json', '--non-interactive'],
+    appRoot,
+  );
+  return parseDeploymentInspection(output, project.projectName);
+}
+
+function processIsRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(error instanceof Error && error.code === 'ESRCH');
+  }
+}
+
+async function acquireLock(appRoot) {
+  const lockPath = path.join(appRoot, LOCK_RELATIVE_PATH);
+  await mkdir(path.dirname(lockPath), { recursive: true });
+  try {
+    const handle = await open(lockPath, 'wx');
+    await handle.writeFile(`${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`);
+    return { handle, lockPath };
+  } catch (error) {
+    if (!(error instanceof Error && error.code === 'EEXIST')) throw error;
+  }
+  const holder = await readFile(lockPath, 'utf8').catch(() => '');
+  let holderPid = null;
+  try {
+    const parsed = JSON.parse(holder);
+    if (Number.isInteger(parsed.pid) && parsed.pid > 0) holderPid = parsed.pid;
+  } catch {
+    // Lock ilegível: não remover automaticamente.
+  }
+  if (holderPid !== null && !processIsRunning(holderPid)) {
+    await unlink(lockPath);
+    return await acquireLock(appRoot);
+  }
+  throw new Error(`Já existe um eval produtivo ativo: ${holder.trim() || 'lock sem identificação'}`);
+}
+
+async function releaseLock(lock) {
+  await lock.handle.close();
+  await unlink(lock.lockPath).catch(() => undefined);
+}
+
+async function writeJsonAtomic(filePath, value) {
+  const temporaryPath = `${filePath}.part`;
+  await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  await rename(temporaryPath, filePath);
+}
+
+async function loadTokenIssuer(appRoot) {
+  const kitRoot = process.env.AITRUS_EVE_KIT_ROOT?.trim()
+    || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'eve-kit');
+  const modulePath = path.join(kitRoot, 'dist', 'production-evals.js');
+  try {
+    return await import(pathToFileURL(modulePath).href);
+  } catch (error) {
+    throw new Error(
+      `Eve Kit compilado não encontrado em ${modulePath}. Execute pnpm build em ${kitRoot}.`,
+      { cause: error },
+    );
+  }
+}
+
+async function runInherited(command, env, cwd) {
+  return await new Promise((resolveResult, reject) => {
+    const child = spawn(command[0], command.slice(1), {
+      cwd,
+      detached: process.platform !== 'win32',
+      env,
+      stdio: 'inherit',
+    });
+    const forward = (signal) => {
+      if (child.pid === undefined) return;
+      try {
+        process.kill(process.platform === 'win32' ? child.pid : -child.pid, signal);
+      } catch (error) {
+        if (!(error instanceof Error && error.code === 'ESRCH')) reject(error);
+      }
+    };
+    const forwardInterrupt = () => forward('SIGINT');
+    const forwardTermination = () => forward('SIGTERM');
+    process.once('SIGINT', forwardInterrupt);
+    process.once('SIGTERM', forwardTermination);
+    child.on('error', reject);
+    child.on('close', (code, signal) => {
+      process.off('SIGINT', forwardInterrupt);
+      process.off('SIGTERM', forwardTermination);
+      resolveResult({ code: code ?? 1, signal });
+    });
+  });
+}
+
+export async function runRemoteProductionEval(options, appRoot = process.cwd()) {
+  const privateKey = process.env.EVE_EVAL_SERVICE_TOKEN_PRIVATE_KEY?.trim();
+  if (!privateKey) {
+    throw new Error('EVE_EVAL_SERVICE_TOKEN_PRIVATE_KEY não foi injetada no executor.');
+  }
+  const lock = await acquireLock(appRoot);
+  const runId = `${new Date().toISOString().replaceAll(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
+  const runDirectory = path.join(appRoot, RUNS_RELATIVE_PATH, runId);
+  const manifestPath = path.join(runDirectory, 'deployment-pin.json');
+  await mkdir(runDirectory, { recursive: true });
+
+  const baseManifest = {
+    aliasUrl: options.targetUrl,
+    audience: options.audience,
+    runId,
+    schemaVersion: '1.0',
+    startedAt: new Date().toISOString(),
+    startedAtSaoPaulo: localTimestamp(),
+  };
+
+  try {
+    const before = await inspectDeployment(appRoot, options.targetUrl);
+    const tokenIssuer = await loadTokenIssuer(appRoot);
+    const ttl = process.env.EVE_EVAL_SERVICE_TOKEN_TTL_SECONDS?.trim();
+    const token = tokenIssuer.mintEveEvalServiceToken({
+      audience: options.audience,
+      issuer: process.env.EVE_EVAL_SERVICE_TOKEN_ISSUER?.trim() || undefined,
+      privateKey,
+      ttlSeconds: ttl ? Number(ttl) : undefined,
+    });
+    await writeJsonAtomic(manifestPath, { ...baseManifest, before, status: 'running' });
+    console.error(
+      `Eval produtivo ${runId}: deployment ${before.id}; pin: ${manifestPath}`,
+    );
+
+    const result = await runInherited(
+      options.command,
+      {
+        ...process.env,
+        AITRUS_EVE_EVAL_DEPLOYMENT_ID: before.id,
+        AITRUS_EVE_EVAL_DEPLOYMENT_URL: before.url,
+        AITRUS_EVE_EVAL_ALIAS_URL: options.targetUrl,
+        AITRUS_EVE_EVAL_PIN_PATH: manifestPath,
+        AITRUS_EVE_EVAL_RUN_ID: runId,
+        EVE_EVAL_AUTH_TOKEN: token,
+      },
+      appRoot,
+    );
+    const after = await inspectDeployment(appRoot, options.targetUrl);
+    const changed = after.id !== before.id;
+    const completedManifest = {
+      ...baseManifest,
+      after,
+      before,
+      childExitCode: result.code,
+      childSignal: result.signal,
+      completedAt: new Date().toISOString(),
+      status: changed ? 'invalidated_deployment_changed' : result.code === 0 ? 'completed' : 'failed',
+    };
+    await writeJsonAtomic(manifestPath, completedManifest);
+    if (changed) {
+      console.error(
+        `Eval invalidado: o alias mudou de ${before.id} para ${after.id} durante a bateria.`,
+      );
+      return 3;
+    }
+    return result.code;
+  } finally {
+    await releaseLock(lock);
+  }
+}
+
+async function main() {
+  if (process.argv.slice(2).some((argument) => argument === '--help' || argument === '-h')) {
+    usage();
+    return 0;
+  }
+  const options = parseRemoteProductionOptions(process.argv.slice(2));
+  return await runRemoteProductionEval(options);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    process.exitCode = await main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 2;
+  }
+}

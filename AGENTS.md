@@ -23,6 +23,9 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Follow links until domain makes sense; honor `Read when` hints.
 - Keep notes short; update docs on behavior/API changes (no ship w/o docs).
 - Add `read_when` hints on cross-cutting docs.
+- EVE: consultar https://eve.dev/docs/getting-started e reutilizar componentes e diretrizes de `~/Projects/eve-kit` antes de reimplementar.
+- EVE/Eval: local usa `~/Projects/agent-scripts/bin/eve-eval-isolated`; Production remota usa `~/Projects/agent-scripts/bin/eve-eval-remote-production`, identidade ES256 efêmera de `~/Projects/eve-kit`, alias Production com pin antes/depois e invalidação se mudar. Casos/oráculos ficam no agente; nunca usar OIDC de Development para atravessar ambientes nem copiar o executor para o projeto.
+- EVE/Vercel: enquanto qualquer dependência não for instalável no builder remoto (`link:` ou Git privado sem credencial), fazer deploy prebuilt somente pelo fluxo canônico do projeto: gate → `vercel pull --environment=production` → `vercel build --prod` → `vercel deploy --prebuilt --prod` → validar `/eve/v1/health` e uma trajetória real. Não usar `eve deploy` nesse modo; reavaliar quando todas as dependências forem instaláveis no build remoto.
 - Models: latest/current only; verify availability in the active CLI/provider before selecting or pinning; avoid static allowlists that drift.
 - Modelos LLM: para investigar capacidades e preços atuais, consultar sem API key `curl -sS https://openrouter.ai/api/v1/models`; docs: https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties.md.
 
@@ -43,6 +46,12 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Não concluir "sem mensagens novas" só por `Messages stored: 0`, principalmente com warnings de app state, `LTHash`, websocket, old counter, keys/session.
 - Após `wacli sync --once`, validar com `wacli doctor --read-only --json` e, quando útil, `wacli messages list --read-only --json --limit 1`.
 
+## Secrets & Environment
+- Infisical é o Secret Manager canônico; todos os segredos e variáveis de ambiente sensíveis devem vir dele.
+- Instruções locais do projeto (`AGENTS.md`, scripts, `.infisical.json`, ambiente, caminho do cofre e comando de inicialização) têm precedência; aplicações continuam lendo variáveis de ambiente, sem SDK ou abstração adicional do Infisical.
+- Na ausência de configuração própria do projeto, consulte `infisical run --help` e use `infisical run -- ./mvnw spring-boot:run` para Java ou `infisical run -- <package-manager> run dev` para TypeScript.
+- Nunca expor valores de segredos em comandos, logs, commits, documentação ou arquivos temporários.
+
 ## Flow & Runtime
 - Use repo's package manager/runtime; no swaps w/o approval.
 - `aura-beta` e `aura-ui-beta` são os protótipos da esteira rápida do Aura; mantê-los sempre sincronizados, respectivamente, com a branch `beta` de `aura` e `aura-ui`. Neles, trabalhar no checkout existente; não criar worktree separada.
@@ -56,17 +65,17 @@ tmux send -t "$s" "cd '$PWD' && portless <nome-do-projeto> pnpm dev" C-m; tmux a
 
 ## Build / Test
 - Before handoff: full gate (biome check/typecheck/tests/knip).
-- Testes locais no WSL: limitar o test runner a no máximo 4 workers (`VITEST_MAX_WORKERS=4` ou opção equivalente).
+- Testes locais no WSL: limitar o test runner a no máximo 3 workers (`VITEST_MAX_WORKERS=3` ou opção equivalente).
 - Mudança não trivial de código: usar `autoreview` antes do handoff; dispensar em docs-only, mudança trivial, revisão independente equivalente ou quando eu optar por não executar.
 - Auto Review: congelar o escopo original; no máximo 2 ciclos de correção. Sem convergência, parar e classificar o restante em bloqueador do escopo, follow-up ou decisão necessária; não ampliar arquivos/LOC em mais de 2x sem aprovação.
 - Segunda opinião solicitada: usar `second-opinion --repo <repository>` para chamar um único Codex ou Claude com acesso amplo para investigação e retornar um laudo Markdown livre, coerente com o tema; acompanhar heartbeat e timeout interno do runner, sem envolver a execução em timeout externo; instruir explicitamente a não alterar arquivos ou estado e não implementar a recomendação sem pedido separado.
 - Mudança de comportamento observável em UI/browser: usar `visual-inspection` após a implementação e os testes; `behavior-validator` está temporariamente desabilitada.
-- Quando ambos se aplicarem: `autoreview` primeiro; `visual-inspection` depois. Não executar painel ou múltiplos engines sem solicitação.
+- Quando ambos se aplicarem: `autoreview` primeiro; `visual-inspection` depois dos testes/builds, sem concorrência com eles ou com outra inspeção. Não executar painel ou múltiplos engines sem solicitação.
 - Lint == `biome check` only (no `pnpm lint`).
 - Testes visuais e browser QA: usar a skill `visual-inspection`, que chama um worker Codex externo fixado em `gpt-5.6-sol` com reasoning `medium`; entregar ao worker um handoff completo do contexto relevante e acesso total ao repositório; o worker usa `agent-browser` em sessão própria/isolada, com heartbeat e timeout interno. Não executar browser QA no agente principal, envolver o runner em timeout externo nem fazer fallback silencioso.
 - Dependency/unused check: use `knip` to find unused dependencies, exports and files.
 - Suggested `check` script:
-  `biome check && pnpm exec tsc -p tsconfig.json --noEmit && pnpm test && pnpm dlx knip --no-progress`
+  `biome check && pnpm exec tsc -p tsconfig.json --noEmit && VITEST_MAX_WORKERS=3 pnpm test && pnpm dlx knip --no-progress`
 - Keep it observable (logs, panes, tails).
 - Observabilidade (sempre): se eu iniciar algo em `tmux`, logo em seguida informar o comando completo de attach (`tmux attach -t <sessao>`). Se eu redirecionar output para arquivo, logo em seguida informar o comando completo de tail com caminho absoluto (sem precisar `cd`): `tail -n 200 -f /caminho/completo/para/arquivo.log`.
 
@@ -74,7 +83,7 @@ tmux send -t "$s" "cd '$PWD' && portless <nome-do-projeto> pnpm dev" C-m; tmux a
 - Safe by default: `git status/diff/log`. Push only when user asks.
 - Commit/push: sempre perguntar + esperar OK explicito do Andre antes de executar (mesmo se ja foi solicitado).
 - Branch changes require user consent.
-- Destructive ops forbidden unless explicit (`reset --hard`, `clean`, `restore`, `rm`, ...).
+- Deletes: use `trash`; permanent/destructive ops require explicit authorization (`rm`, `git reset --hard`, `git clean`, `git restore`, ...).
 - Remotes under `~/Projects`: prefer HTTPS; flip SSH->HTTPS before pull/push.
 - Don't delete unexpected stuff; stop + ask.
 - No repo-wide search/replace scripts; keep edits small/reviewable.

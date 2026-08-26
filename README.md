@@ -20,7 +20,10 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 - Lint: usar `biome check` (nao usar `pnpm lint`).
 - Incluir `knip` no check para detectar dependencias, exports e arquivos nao utilizados.
 - Exemplo de script `check`:
-  `biome check && pnpm exec tsc -p tsconfig.json --noEmit && pnpm test && pnpm dlx knip --no-progress`
+  `biome check && pnpm exec tsc -p tsconfig.json --noEmit && VITEST_MAX_WORKERS=3 pnpm test && pnpm dlx knip --no-progress`
+
+## Exclusão recuperável
+- `./bin/trash <caminho> [...]`: wrapper canônico para `gio trash`; publicar como `~/.local/bin/trash` para funcionar também em agentes e shells não interativos.
 
 ## Google Workspace / GWS
 - CLI base: `gws`.
@@ -35,6 +38,11 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
   `./bin/gws-pessoal auth login --services drive,docs,sheets,slides,gmail`
 - Se a conta pessoal falhar com permissao do projeto Google, confirmar que `drelum@gmail.com` esta como OAuth test user e com IAM `Service Usage Consumer` no projeto OAuth.
 
+## Eve Eval isolado
+- `./bin/eve-eval-isolated [argumentos]`: em Linux/WSL com `flock` (`util-linux`), executa `eve eval` local com `.eve/.workflow-data` novo, preserva `.eve/m` e arquiva os stores anterior e produzido em `.eve/eval-isolated-runs/`.
+- `./bin/eve-eval-remote-production --audience <aud> -- <comando>`: usa a identidade efêmera do `eve-kit`, fixa o deployment Production antes/depois e invalida a bateria se o alias mudar.
+- Skill canônica: `eve-isolated-evals`. Ela separa isolamento local de workflow e isolamento remoto de identidade/deployment.
+
 ## Skills do Codex
 - Fonte canonica unica: `skills/*/SKILL.md`.
 - Validação de front matter, campos obrigatórios e nomes duplicados: `./script/validate-skills`
@@ -48,9 +56,12 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 - Substituição explícita de diretórios reais com nomes canônicos: `./script/sync-codex-skills.sh --replace-existing`.
 
 ### Skills canônicas
+- `aura-packaging`: diagnostica empacotamento de um EAN (cotação, NF, venda, custo) via script somente leitura; CNPJ padrão `05101867000157`.
 - `autoreview`: revisão source-aware isolada com Codex ou Claude; valida a resposta estruturada internamente e entrega relatório Markdown; Codex usa `gpt-5.6-sol` com reasoning `high` por padrão; suporta mudanças locais, branch e commit.
 - `behavior-validator`: temporariamente desabilitada por `skills/behavior-validator/.disabled`.
 - `codex-session-restorer`: localiza sessões interativas recentes do Codex e reabre cada uma em uma aba nomeada do Windows Terminal a partir do WSL.
+- `eve-isolated-evals`: executa baterias locais sobre workflow store novo e baterias remotas em Production com identidade efêmera e pin de deployment.
+- `implementation-delegator`: permite ao Claude Code delegar uma implementação delimitada a um worker Codex com acesso total ao repositório, progresso incremental e sem timeout automático.
 - `second-opinion`: consulta independente com Codex ou Claude e acesso amplo ao repositório informado; produz laudo Markdown livre e coerente com o tema, progresso/heartbeat em stderr, timeout interno e logs incrementais, instruído a não alterar estado, sem usar clipboard.
 - `skill-cleaner`: auditoria de inventário, orçamento de contexto, uso recente, duplicações e descrições; `--no-logs` desativa a leitura de histórico.
 - `visual-inspection`: browser QA em worker Codex externo, fixado em `gpt-5.6-sol` com reasoning `medium`; recebe handoff completo e acesso total ao repositório, usa `agent-browser`, sessão isolada, progresso/heartbeat em stderr, timeout interno, evidências em `/tmp` e relatório Markdown.
