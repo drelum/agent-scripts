@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Lista o que mudou no Beta desde a última novidade publicada: commits e tickets tocados.
+# Uso: aura-novidades-pendentes [AAAA-MM-DD]   (padrão: data da entrada mais recente)
+# Raiz do monorepo Beta: AURA_BETA_ROOT (padrão ~/Projects/beta).
+set -euo pipefail
+raiz="${AURA_BETA_ROOT:-$HOME/Projects/beta}"
+cd "$raiz"
+
+desde="${1:-}"
+if [ -z "$desde" ]; then
+  ultimo="$(ls novidades/entradas/*.md 2>/dev/null | sed 's|.*/||' | sort | tail -1)"
+  desde="${ultimo:0:10}"
+  [ -n "$desde" ] || desde="$(date -d '-7 days' +%F)"
+fi
+
+echo "== Novidades publicadas (última: ${ultimo:-nenhuma})"
+ls novidades/entradas/*.md 2>/dev/null | sed 's|.*/||; s|\.md$||' | sort -r | head -5
+
+echo
+echo "== Commits do Beta desde $desde (aura-beta, aura-ui-beta, eve-quote-parser)"
+git log --since="$desde 00:00" --no-merges --date=short --pretty='%ad %h %s' -- aura-beta aura-ui-beta eve-quote-parser \
+  | grep -vE 'chore\(|docs\(|ci\(|test\(' || true
+
+echo
+echo "== Tickets com data >= $desde em beta-tickets.md"
+python3 - "$desde" <<'EOF'
+import re, sys
+desde = sys.argv[1]
+d, m, y = desde[8:10], desde[5:7], desde[0:4]
+alvo = f"{d}/{m}/{y}"
+texto = open('beta-tickets.md', encoding='utf-8').read()
+blocos = re.split(r'\n(?=## BETA-\d+)', texto)
+def para_iso(s):
+    dd, mm, yy = s.split('/')
+    return f"{yy}-{mm}-{dd}"
+for b in blocos:
+    m_ = re.match(r'## (BETA-\d+) · (.+)', b)
+    if not m_:
+        continue
+    datas = sorted({para_iso(x) for x in re.findall(r'\b(\d{2}/\d{2}/\d{4})\b', b)})
+    if datas and datas[-1] >= desde:
+        status = re.search(r'\*\*Status:\*\* ([^\n]+)', b)
+        print(f"- {m_.group(1)} · {m_.group(2).strip()} · última data {datas[-1]} · {status.group(1)[:80] if status else ''}")
+EOF
+
+echo
+echo "== Próximo passo: para cada item com efeito visível ao gestor, uma entrada em novidades/entradas/."

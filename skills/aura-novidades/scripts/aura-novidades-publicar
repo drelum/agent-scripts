@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Build + deploy de produção + conferência das URLs do site de novidades.
+# Uso: aura-novidades-publicar            (publica)
+#      aura-novidades-publicar --preview  (só preview, protegido por login da Vercel)
+# Raiz do monorepo Beta: AURA_BETA_ROOT (padrão ~/Projects/beta).
+set -euo pipefail
+cd "${AURA_BETA_ROOT:-$HOME/Projects/beta}/novidades"
+
+# Guarda: nenhuma imagem versionada pode conter o nome real da loja/grupo no nome do arquivo,
+# e nenhum texto de entrada pode citar loja, CNPJ ou grupo do ambiente de testes.
+if grep -rlE 'Drogarias Da Vovo|Genivaldo|05\.101\.867|05101867' entradas dias 2>/dev/null; then
+  echo "publicar: texto com dado sensível nos arquivos acima — corrija antes de publicar" >&2
+  exit 1
+fi
+
+# Build; qualquer aviso (ex.: dia sem chamada) bloqueia a publicação.
+saida_build="$(pnpm build 2>&1)" || { echo "$saida_build"; exit 1; }
+echo "$saida_build"
+if echo "$saida_build" | grep -q '^aviso:'; then
+  echo "publicar: resolva os avisos acima antes de publicar" >&2
+  exit 1
+fi
+
+if [ "${1:-}" = "--preview" ]; then
+  vercel deploy --yes --scope aitrus1
+  exit 0
+fi
+
+vercel deploy --prod --yes --scope aitrus1 | tail -3
+
+base="https://novidades.aitrus.com.br"
+# O alias leva alguns segundos para propagar na borda: até 3 rodadas com pausa.
+for rodada in 1 2 3; do
+  falhas=0
+  for caminho in / $(ls -d dist/20*/ | sed 's|dist||; s|/$||') $(ls -d dist/novidades/*/ | grep -v '/img/$' | sed 's|dist||; s|/$||'); do
+    codigo="$(curl -s -o /dev/null -w '%{http_code}' -m 20 --resolve novidades.aitrus.com.br:443:76.76.21.21 "$base$caminho" || echo 000)"
+    [ "$codigo" = 200 ] || { echo "  $codigo $caminho"; falhas=$((falhas + 1)); }
+  done
+  [ "$falhas" -eq 0 ] && break
+  [ "$rodada" -lt 3 ] && { echo "publicar: rodada $rodada com $falhas falha(s); aguardando propagação…"; sleep 15; }
+done
+if [ "$falhas" -eq 0 ]; then
+  echo "publicar: todas as páginas respondem 200 em $base"
+else
+  echo "publicar: $falhas página(s) sem 200" >&2
+  exit 1
+fi

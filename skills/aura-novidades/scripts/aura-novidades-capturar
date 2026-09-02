@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Funções para capturar telas do Aura Beta já mascaradas. Carregar com:
+#   source ~/Projects/agent-scripts/skills/aura-novidades/scripts/aura-novidades-capturar
+# Depois:
+#   nov_login /product-assortment          # abre sessão isolada, autentica por token, viewport 1440×900
+#   ... interações com agent-browser ...
+#   nov_shot novidades/entradas/img/x.png  # mascara, verifica e captura (falha se restar dado sensível)
+#   nov_fim                                # fecha a sessão
+# Nunca imprime token, senha ou a URL de bootstrap.
+set -o pipefail
+
+NOV_RAIZ="${AURA_BETA_ROOT:-$HOME/Projects/beta}"
+NOV_SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NOV_UI="${NOV_UI:-https://ui.beta.aura.localhost}"
+NOV_API="${NOV_API:-https://api.beta.aura.localhost}"
+NOV_CNPJ="${NOV_CNPJ:-05101867000157}"
+NOV_MASCARA="$NOV_SKILL/mascara.js"
+
+nov_login() {
+  local rota="${1:-/product-assortment}"
+  export AGENT_BROWSER_SESSION="$(agent-browser session id --scope worktree --prefix novidades)"
+  local token
+  token="$(BETA_API_URL="$NOV_API" "$NOV_RAIZ/scripts/beta-api-token.sh")" || { echo "nov_login: falha ao obter token" >&2; return 1; }
+  agent-browser --allowed-domains "${NOV_UI#https://},${NOV_API#https://}" \
+    open "$NOV_UI/login?token=${token}&cnpj=${NOV_CNPJ}&redirect_uri=${rota}" >/dev/null 2>&1
+  unset token
+  agent-browser set viewport 1440 900 >/dev/null
+  sleep 8
+  agent-browser wait --load networkidle >/dev/null 2>&1 || true
+  local url
+  url="$(agent-browser get url)"
+  case "$url" in
+    *token=*) echo "nov_login: bootstrap não concluiu (URL ainda com token)" >&2; return 1 ;;
+  esac
+  echo "nov_login: $url"
+}
+
+# Mascara e verifica; só captura quando nada sensível restou.
+nov_shot() {
+  local destino="$1"
+  [ -n "$destino" ] || { echo "nov_shot: informe o arquivo de destino" >&2; return 1; }
+  local resultado
+  resultado="$(agent-browser eval "$(cat "$NOV_MASCARA")" 2>&1 | tail -1)"
+  # agent-browser devolve a string JSON com aspas escapadas: aceitar as duas formas
+  case "$resultado" in
+    *'restos\":[]'*|*'restos":[]'*) ;;
+    *) echo "nov_shot: dado sensível ainda visível → $resultado" >&2; return 1 ;;
+  esac
+  agent-browser screenshot "$destino" >/dev/null || return 1
+  echo "nov_shot: $destino ($resultado)"
+}
+
+nov_fim() {
+  agent-browser close >/dev/null 2>&1 || true
+  unset AGENT_BROWSER_SESSION
+}

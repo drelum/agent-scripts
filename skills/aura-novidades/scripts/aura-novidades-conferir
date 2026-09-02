@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Gera o site e captura home, página do dia mais recente e uma novidade em 1024×768, a resolução
+# habitual do leitor. Uso: aura-novidades-conferir [pasta-de-saida]   (padrão: /tmp/aura-novidades-conferir)
+# Abra os PNGs antes de publicar: densidade, cortes, texto vazando e padrão visual do Aura.
+set -euo pipefail
+raiz="${AURA_BETA_ROOT:-$HOME/Projects/beta}/novidades"
+saida="${1:-/tmp/aura-novidades-conferir}"
+porta="${AURA_NOVIDADES_PORTA:-8766}"
+cd "$raiz"
+mkdir -p "$saida"
+
+pnpm build
+python3 -m http.server "$porta" --directory dist >/dev/null 2>&1 &
+servidor=$!
+trap 'kill "$servidor" 2>/dev/null || true' EXIT
+sleep 1
+
+dia="$(ls -d dist/20*/ | sed 's|dist/||; s|/$||' | sort | tail -1)"
+novidade="$(ls -d dist/novidades/*/ | grep -v '/img/$' | sed 's|dist||; s|/$||' | sort | tail -1)"
+
+export AGENT_BROWSER_SESSION="$(agent-browser session id --scope worktree --prefix novidades-conferir)"
+agent-browser open "http://127.0.0.1:$porta/" >/dev/null 2>&1
+agent-browser set viewport 1024 768 >/dev/null
+sleep 2
+agent-browser screenshot "$saida/home.png" >/dev/null
+agent-browser open "http://127.0.0.1:$porta/$dia" >/dev/null 2>&1
+sleep 2
+agent-browser screenshot "$saida/dia-$dia.png" >/dev/null
+agent-browser open "http://127.0.0.1:$porta$novidade" >/dev/null 2>&1
+sleep 2
+agent-browser screenshot "$saida/novidade.png" >/dev/null
+agent-browser close >/dev/null 2>&1 || true
+
+echo "conferir: capturas em $saida (home.png, dia-$dia.png, novidade.png) — abrir e avaliar em 1024×768"
