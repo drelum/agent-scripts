@@ -20,6 +20,7 @@ import {
   archiveWorkflowStore,
   isCompetingEveCommand,
   releaseLock,
+  resolveMicrosandboxHome,
   signalNumber,
 } from '../bin/eve-eval-isolated';
 
@@ -74,6 +75,20 @@ test('preserva números de sinais além de interrupção e término', () => {
   assert.equal(signalNumber('SIGTERM'), 15);
   assert.equal(signalNumber('SIGKILL'), 9);
   assert.equal(signalNumber('SIGABRT'), 6);
+});
+
+test('respeita MSB_HOME explícito para caminhos de socket curtos', () => {
+  assert.equal(
+    resolveMicrosandboxHome('/projeto/com/caminho/longo', { MSB_HOME: '/tmp/eve-msb' }),
+    '/tmp/eve-msb',
+  );
+  const fallback = resolveMicrosandboxHome('/projeto/com/caminho/que/pode/ser/muito/longo', {});
+  assert.match(fallback, /^\/tmp\/eve-eval-msb-[a-f0-9]{16}$/u);
+  assert.ok(fallback.length < 64);
+  assert.equal(
+    resolveMicrosandboxHome('/projeto/com/caminho/que/pode/ser/muito/longo', {}),
+    fallback,
+  );
 });
 
 test('lock ativo impede a bateria e preserva o store existente', async () => {
@@ -162,7 +177,8 @@ test('propaga o código de saída correspondente ao sinal real do Eve', async ()
   }
 });
 
-test('executa eval novo, preserva cache e arquiva os dois stores', async () => {
+for (const timeout of [undefined, '0', '1800000']) {
+test(`executa eval isolado sem substituir timeout nativo/explicito: ${timeout ?? 'ausente'}`, async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'eve-isolated-e2e-'));
   try {
     const fakeEve = path.join(root, 'node_modules', '.bin', 'eve');
@@ -183,8 +199,8 @@ mkdirSync(workflow, { recursive: true });
 writeFileSync(join(workflow, 'new.json'), '{"source":"new"}\\n');
 writeFileSync(join(process.cwd(), 'observation.json'), JSON.stringify({
   args: process.argv.slice(2),
-  bodyTimeout: process.env.WORKFLOW_LOCAL_BODY_TIMEOUT_MS,
-  headersTimeout: process.env.WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS,
+  bodyTimeout: process.env.WORKFLOW_LOCAL_BODY_TIMEOUT_MS ?? null,
+  headersTimeout: process.env.WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS ?? null,
   msbHome: process.env.MSB_HOME,
 }));
 process.exitCode = 7;
@@ -192,9 +208,18 @@ process.exitCode = 7;
     );
     await chmod(fakeEve, 0o755);
 
+    const environment = { ...process.env };
+    delete environment.MSB_HOME;
+    delete environment.WORKFLOW_LOCAL_BODY_TIMEOUT_MS;
+    delete environment.WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS;
+    if (timeout !== undefined) {
+      environment.WORKFLOW_LOCAL_BODY_TIMEOUT_MS = timeout;
+      environment.WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS = timeout;
+    }
     const result = spawnSync(process.execPath, [SCRIPT_PATH, '--filter', 'smoke'], {
       cwd: root,
       encoding: 'utf8',
+      env: environment,
     });
 
     assert.equal(result.status, 7, result.stderr);
@@ -214,17 +239,19 @@ process.exitCode = 7;
     const observation = JSON.parse(await readFile(path.join(root, 'observation.json'), 'utf8'));
     assert.deepEqual(observation, {
       args: ['eval', '--filter', 'smoke'],
-      bodyTimeout: '300000',
-      headersTimeout: '300000',
-      msbHome: path.join(root, '.eve', 'm'),
+      bodyTimeout: timeout ?? null,
+      headersTimeout: timeout ?? null,
+      msbHome: resolveMicrosandboxHome(root, {}),
     });
     const metadata = JSON.parse(await readFile(path.join(runRoot, 'metadata.json'), 'utf8'));
     assert.equal(metadata.exitCode, 7);
     assert.deepEqual(metadata.arguments, ['--filter', 'smoke']);
     assert.equal(metadata.timeZone, 'America/Sao_Paulo');
+    assert.deepEqual(metadata.workflowTimeoutsMs, { body: timeout ?? null, headers: timeout ?? null });
     assert.match(result.stderr, /Workflow store anterior arquivado/u);
     assert.match(result.stderr, /Estado isolado da bateria/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
+}

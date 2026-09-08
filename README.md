@@ -39,6 +39,7 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 - Se a conta pessoal falhar com permissao do projeto Google, confirmar que `drelum@gmail.com` esta como OAuth test user e com IAM `Service Usage Consumer` no projeto OAuth.
 
 ## Eve Eval isolado
+- Timeouts de transporte pertencem ao EVE instalado. O wrapper não define `WORKFLOW_LOCAL_BODY_TIMEOUT_MS`/`WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS`; preserva overrides explícitos e registra `null` quando ausentes. EVE ≥0.45.2 já evita replay de entregas longas. Limite a bateria com `timeoutMs`/`--timeout` nativos, não com um timeout HTTP menor.
 - `./bin/eve-eval-isolated [argumentos]`: em Linux/WSL com `flock` (`util-linux`), executa `eve eval` local com `.eve/.workflow-data` novo, preserva `.eve/m` e arquiva os stores anterior e produzido em `.eve/eval-isolated-runs/`.
 - `./bin/eve-eval-remote-production --audience <aud> -- <comando>`: usa a identidade efêmera do `eve-kit`, fixa o deployment Production antes/depois e invalida a bateria se o alias mudar.
 - Skill canônica: `eve-isolated-evals`. Ela separa isolamento local de workflow e isolamento remoto de identidade/deployment.

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   mkdir,
   readdir,
@@ -11,7 +11,7 @@ import {
   stat,
   writeFile,
 } from 'node:fs/promises';
-import { constants as osConstants } from 'node:os';
+import { constants as osConstants, tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -19,7 +19,6 @@ const WORKFLOW_DATA_RELATIVE_PATH = '.eve/.workflow-data';
 const RUN_ARCHIVES_RELATIVE_PATH = '.eve/eval-isolated-runs';
 const LOCK_RELATIVE_PATH = '.eve/eval-isolation.lock';
 const TIME_ZONE = 'America/Sao_Paulo';
-const LOCAL_WORKFLOW_TIMEOUT_MS = '300000';
 
 function usage() {
   console.log(`Executa uma bateria local do Eve Eval sobre um workflow store novo.
@@ -28,7 +27,7 @@ Uso:
   eve-eval-isolated [argumentos do eve eval]
 
 O comando deve ser executado na raiz do projeto Eve. O estado anterior e o estado
-gerado são movidos para .eve/eval-isolated-runs/; .eve/m permanece compartilhado.`);
+gerado são movidos para .eve/eval-isolated-runs/; o cache MSB curto permanece compartilhado por projeto.`);
 }
 
 function localTimestamp(date = new Date()) {
@@ -193,6 +192,15 @@ export function signalNumber(signal) {
   return osConstants.signals[signal] ?? osConstants.signals.SIGTERM;
 }
 
+export function resolveMicrosandboxHome(appRoot, environment = process.env) {
+  if (environment.MSB_HOME !== undefined) return environment.MSB_HOME;
+  const projectKey = createHash('sha256')
+    .update(path.resolve(appRoot))
+    .digest('hex')
+    .slice(0, 16);
+  return path.join(tmpdir(), `eve-eval-msb-${projectKey}`);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.length === 1 && (args[0] === '--help' || args[0] === '-h')) {
@@ -237,18 +245,12 @@ async function main() {
     }
     ownsWorkflowStore = true;
 
-    const workflowHeadersTimeout =
-      process.env.WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS ?? LOCAL_WORKFLOW_TIMEOUT_MS;
-    const workflowBodyTimeout =
-      process.env.WORKFLOW_LOCAL_BODY_TIMEOUT_MS ?? LOCAL_WORKFLOW_TIMEOUT_MS;
     const child = spawn(executable, ['eval', ...args], {
       cwd: appRoot,
       detached: process.platform !== 'win32',
       env: {
         ...process.env,
-        MSB_HOME: path.join(appRoot, '.eve', 'm'),
-        WORKFLOW_LOCAL_BODY_TIMEOUT_MS: workflowBodyTimeout,
-        WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS: workflowHeadersTimeout,
+        MSB_HOME: resolveMicrosandboxHome(appRoot),
       },
       stdio: 'inherit',
     });
@@ -295,9 +297,8 @@ async function main() {
             preexistingWorkflowStore: preexistingArchive,
             runWorkflowStore: runArchive,
             workflowTimeoutsMs: {
-              body: process.env.WORKFLOW_LOCAL_BODY_TIMEOUT_MS ?? LOCAL_WORKFLOW_TIMEOUT_MS,
-              headers:
-                process.env.WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS ?? LOCAL_WORKFLOW_TIMEOUT_MS,
+              body: process.env.WORKFLOW_LOCAL_BODY_TIMEOUT_MS ?? null,
+              headers: process.env.WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS ?? null,
             },
           },
           null,
