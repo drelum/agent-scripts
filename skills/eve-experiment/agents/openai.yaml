@@ -1,0 +1,4 @@
+interface:
+  display_name: "EVE Experiment"
+  short_description: "Executa ciclos medidos de melhoria de agentes EVE"
+  default_prompt: "Use $eve-experiment para testar uma hipótese de melhoria deste agente EVE, medir o resultado e evitar gates ou deploys repetidos."
