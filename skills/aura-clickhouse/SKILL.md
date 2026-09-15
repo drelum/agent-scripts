@@ -15,6 +15,7 @@ ch=/home/drelu/Projects/agent-scripts/skills/aura-clickhouse/scripts/aura-clickh
 
 ```bash
 "$ch" ping
+"$ch" info
 "$ch" databases
 "$ch" tables analytics
 "$ch" describe analytics.quote
@@ -25,6 +26,10 @@ SELECT count()
 FROM analytics.store
 SQL
 ```
+
+Enviar **uma instrução SQL por chamada**, via stdin como acima ou `"$ch" query /caminho/consulta.sql`. O argumento de `query` é um arquivo, não SQL inline. Para várias consultas, fazer chamadas separadas; CTEs e subconsultas podem compor uma única instrução.
+
+`info` mostra a origem da configuração sem segredos e consulta versão, timezone e horário do servidor; exige conexão configurada.
 
 O runner:
 
@@ -41,6 +46,9 @@ Ler [references/tables.md](references/tables.md) ao escolher fonte, grão ou ide
 2. Executar `show-create` antes de varrer tabela grande; respeitar `ORDER BY`, partição e TTL.
 3. Começar por contagem ou amostra limitada; só então agregar.
 4. Distinguir campos originais, normalizados e agregados. Não inferir o grão pelo nome da tabela.
+5. Usar aliases de agregação distintos das colunas de entrada (`sum(stores) AS total_stores`), evitando colisões quando a coluna também aparece em outra agregação.
+
+Ler [references/diagnostics.md](references/diagnostics.md) ao corrigir erros SQL/conexão, investigar timeout ou consumir resultados em scripts.
 
 ## Datas e segurança
 
