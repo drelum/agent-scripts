@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aura Cloud Logs"
+  short_description: "Diagnóstico de logs do Aura no Google Cloud"
+  default_prompt: "Use $aura-cloud-logs para investigar os logs do Aura Beta publicado, somente em leitura."
