@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        help="Optional model override; Codex defaults to gpt-5.6-sol, Claude to its CLI default.",
+        help="Optional model override; Codex defaults to gpt-6-sol, Claude to its CLI default.",
     )
     parser.add_argument(
         "--fast",

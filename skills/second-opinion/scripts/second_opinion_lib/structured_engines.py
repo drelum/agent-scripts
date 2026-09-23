@@ -17,7 +17,7 @@ from typing import Any, TextIO
 from zoneinfo import ZoneInfo
 
 
-DEFAULT_CODEX_MODEL = "gpt-5.6-sol"
+DEFAULT_CODEX_MODEL = "gpt-6-sol"
 DEFAULT_CODEX_REASONING_EFFORT = "high"
 DEFAULT_TIMEOUT_SECONDS = 15 * 60
 DEFAULT_HEARTBEAT_SECONDS = 30
