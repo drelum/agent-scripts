@@ -57,6 +57,7 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 - Substituição explícita de diretórios reais com nomes canônicos: `./script/sync-codex-skills.sh --replace-existing`.
 
 ### Skills canônicas
+- `aura-posthog`: análise somente leitura do uso do Aura no PostHog (navegação, carrinho, envio de pedido e erros), com descoberta de eventos a cada uso, resolução de e-mail pelo cadastro Aura e mascaramento de tokens; executor em `skills/aura-posthog/scripts/aura-posthog`.
 - `aura-packaging`: diagnostica empacotamento de um EAN (cotação, NF, venda, custo) via script somente leitura; CNPJ padrão `05101867000157`.
 - `autoreview`: revisão source-aware isolada com Codex ou Claude; valida a resposta estruturada internamente e entrega relatório Markdown; Codex usa `gpt-5.6-sol` com reasoning `high` por padrão; suporta mudanças locais, branch e commit.
 - `behavior-validator`: temporariamente desabilitada por `skills/behavior-validator/.disabled`.

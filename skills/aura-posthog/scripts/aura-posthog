@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""Executor somente leitura do PostHog do Aura (projeto 331102) sobre `posthog-cli api`.
+
+Toda saída passa por mascaramento de tokens e JWTs: URLs do Aura podem carregar o token de login.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+CLICKHOUSE = Path(__file__).resolve().parents[2] / "aura-clickhouse" / "scripts" / "aura-clickhouse"
+# Mesma regra do Painel (server/userActivity.ts): domínios internos não representam uso de farmácias.
+INTERNAL_DOMAINS = ("@hipersaude.com.br", "@aitrus.com.br")
+# Identidade usada pelo Painel e pela extração de acessos: IDs explícitos primeiro; perfil/distinct_id só se identificado.
+USER_ID_SQL = ("coalesce(nullIf(toString(properties.$user_id), ''), nullIf(toString(properties.user_id), ''), "
+               "if(properties.$is_identified = true, coalesce(nullIf(toString(person.properties.user_id), ''), distinct_id), ''))")
+IDENTIFIED_SQL = "(properties.$is_identified IS NULL OR properties.$is_identified = true)"
+MAX_ROWS = 500
+
+_SECRETS = [
+    (re.compile(r"(?i)([?&#](?:token|access_token|id_token|refresh_token|code|password|senha)=)[^&#\s|\"']+"), r"\1[REDACTED]"),
+    (re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), "[JWT REDACTED]"),
+]
+
+
+def redact(text: str) -> str:
+    for pattern, replacement in _SECRETS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def run_sql(sql: str) -> list[list[str]]:
+    """Executa HogQL e devolve linhas (cabeçalho incluso). Falha explícita em erro do PostHog."""
+    result = subprocess.run(
+        ["posthog-cli", "api", "call", "execute-sql", json.dumps({"query": sql, "truncate": False})],
+        capture_output=True, text=True, timeout=600,
+    )
+    out = result.stdout
+    marker = out.find("</taxonomy_warnings>")
+    if marker >= 0:
+        warnings = out[:marker]
+        print(redact(re.sub(r"<[^>]+>", "", warnings)).strip(), file=sys.stderr)
+        out = out[marker + len("</taxonomy_warnings>"):]
+    out = out.strip()
+    if result.returncode != 0 or out.startswith("Error"):
+        raise SystemExit(redact(f"aura-posthog: falha na consulta: {out or result.stderr.strip()}"))
+    return [line.split("|") for line in out.splitlines() if line.strip()]
+
+
+def emit(rows: list[list[str]]) -> None:
+    for row in rows:
+        print(redact("|".join(row)))
+    if len(rows) - 1 >= MAX_ROWS:
+        print(f"aura-posthog: {MAX_ROWS} linhas é o teto por consulta; pagine por chave (ver references/hogql.md).", file=sys.stderr)
+
+
+def read_sql(path: str | None) -> str:
+    text = Path(path).read_text(encoding="utf-8") if path and path != "-" else sys.stdin.read()
+    if not text.strip():
+        raise SystemExit("aura-posthog: SQL vazio.")
+    return text.replace("{{USER_ID}}", USER_ID_SQL).replace("{{IDENTIFIED}}", IDENTIFIED_SQL)
+
+
+def sql_literal(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def cmd_sql(args: argparse.Namespace) -> None:
+    emit(run_sql(read_sql(args.file)))
+
+
+def cmd_events(args: argparse.Namespace) -> None:
+    where = [f"timestamp >= now() - INTERVAL {args.days} DAY"]
+    if args.match:
+        where.append(f"match(event, {sql_literal('(?i)' + args.match)})")
+    if args.host:
+        where.append(f"toString(properties.$host) = {sql_literal(args.host)}")
+    emit(run_sql(f"""SELECT event, count() AS eventos, uniq(distinct_id) AS pessoas, uniq($session_id) AS sessoes,
+      max(toDate(toTimeZone(timestamp, 'America/Sao_Paulo'))) AS ultimo, arraySort(groupUniqArray(toString(properties.$host))) AS hosts
+    FROM events WHERE {' AND '.join(where)} GROUP BY event ORDER BY eventos DESC LIMIT {MAX_ROWS}"""))
+
+
+def cmd_props(args: argparse.Namespace) -> None:
+    emit(run_sql(f"""SELECT k AS propriedade, count() AS eventos, round(100 * count() / any(total), 1) AS pct
+    FROM (SELECT arrayJoin(JSONExtractKeys(toString(properties))) AS k,
+            (SELECT count() FROM events WHERE timestamp >= now() - INTERVAL {args.days} DAY AND event = {sql_literal(args.event)}) AS total
+          FROM events WHERE timestamp >= now() - INTERVAL {args.days} DAY AND event = {sql_literal(args.event)})
+    {"WHERE NOT startsWith(k, '$')" if args.custom else ""}
+    GROUP BY k ORDER BY eventos DESC LIMIT {MAX_ROWS}"""))
+
+
+def cmd_values(args: argparse.Namespace) -> None:
+    prop = args.property
+    if not re.fullmatch(r"\$?[A-Za-z_][A-Za-z0-9_$]*", prop):
+        raise SystemExit("aura-posthog: nome de propriedade inválido.")
+    emit(run_sql(f"""SELECT left(toString(properties.{prop}), 200) AS valor, count() AS eventos, uniq(distinct_id) AS pessoas
+    FROM events WHERE timestamp >= now() - INTERVAL {args.days} DAY AND event = {sql_literal(args.event)}
+      AND JSONHas(toString(properties), {sql_literal(prop)})
+    GROUP BY valor ORDER BY eventos DESC LIMIT {args.limit}"""))
+
+
+def cmd_user(args: argparse.Namespace) -> None:
+    email = args.email.strip().lower()
+    registry = subprocess.run(
+        [str(CLICKHOUSE), "query"], capture_output=True, text=True, timeout=300,
+        input=f"SELECT toString(id), name, email, active FROM aura.user FINAL WHERE _peerdb_is_deleted = 0 AND lower(trim(email)) = {sql_literal(email)} FORMAT TSV",
+    )
+    if registry.returncode != 0:
+        raise SystemExit(f"aura-posthog: cadastro Aura indisponível: {registry.stderr.strip()[:300]}")
+    users = [line.split("\t") for line in registry.stdout.splitlines() if line.strip()]
+    if not users:
+        raise SystemExit("aura-posthog: e-mail não encontrado no cadastro Aura.")
+    internal = email.endswith(INTERNAL_DOMAINS)
+    for user_id, name, mail, active in users:
+        print(f"usuário Aura: id={user_id} nome={name} email={mail} ativo={active}{' INTERNO' if internal else ''}")
+    ids = ", ".join(sql_literal(row[0]) for row in users)
+    emit(run_sql(f"""SELECT {USER_ID_SQL} AS user_id, toString(properties.$host) AS host, count() AS eventos, uniq($session_id) AS sessoes,
+      uniq(toDate(toTimeZone(timestamp, 'America/Sao_Paulo'))) AS dias,
+      min(toTimeZone(timestamp, 'America/Sao_Paulo')) AS primeiro, max(toTimeZone(timestamp, 'America/Sao_Paulo')) AS ultimo
+    FROM events WHERE timestamp >= now() - INTERVAL {args.days} DAY AND {IDENTIFIED_SQL} AND {USER_ID_SQL} IN ({ids})
+    GROUP BY user_id, host ORDER BY eventos DESC"""))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="aura-posthog", description="PostHog do Aura, somente leitura, com mascaramento de tokens.")
+    sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("sql", help="executa HogQL de arquivo ou stdin; aceita {{USER_ID}} e {{IDENTIFIED}}")
+    p.add_argument("file", nargs="?")
+    p.set_defaults(fn=cmd_sql)
+    p = sub.add_parser("events", help="eventos vigentes com volume, alcance, último dia e hosts")
+    p.add_argument("--days", type=int, default=30)
+    p.add_argument("--match", help="regex (sem diferenciar maiúsculas) sobre o nome do evento")
+    p.add_argument("--host")
+    p.set_defaults(fn=cmd_events)
+    p = sub.add_parser("props", help="propriedades de um evento e sua cobertura")
+    p.add_argument("event")
+    p.add_argument("--days", type=int, default=30)
+    p.add_argument("--custom", action="store_true", help="somente propriedades do Aura (sem prefixo $)")
+    p.set_defaults(fn=cmd_props)
+    p = sub.add_parser("values", help="valores de uma propriedade de um evento")
+    p.add_argument("event")
+    p.add_argument("property")
+    p.add_argument("--days", type=int, default=30)
+    p.add_argument("--limit", type=int, default=30)
+    p.set_defaults(fn=cmd_values)
+    p = sub.add_parser("user", help="resolve e-mail no cadastro Aura e resume a atividade no PostHog por host")
+    p.add_argument("email")
+    p.add_argument("--days", type=int, default=90)
+    p.set_defaults(fn=cmd_user)
+    args = parser.parse_args()
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()

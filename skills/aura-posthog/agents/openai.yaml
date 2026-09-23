@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aura PostHog"
+  short_description: "Navegação, carrinho, envio e erros do Aura no PostHog"
+  default_prompt: "Use $aura-posthog para analisar navegação, carrinho, envio de pedidos e erros do Aura no PostHog."
