@@ -10,6 +10,7 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Scope/files: repo or `~/Projects/agent-scripts` only.
 - Datas/horários: sempre reportar em formato brasileiro e localidade São Paulo, Brasil; converter de GMT/UTC quando necessário.
 - Screenshot: quando eu pedir para consultar o screenshot, buscar o arquivo mais recente em `/mnt/c/Users/drelu/Downloads` cujo nome comece com `Screenshot_`; no WSL, tratar `C:\Users\drelu\Downloads` como `/mnt/c/Users/drelu/Downloads`; se não encontrar, avisar claramente.
+- Paths ao usuário: sempre como link markdown, texto = path Windows absoluto (`wslpath -w`), destino = URI `file://` (`[\\wsl.localhost\Ubuntu\home\drelu\x.html](file://wsl.localhost/Ubuntu/home/drelu/x.html)`; `/mnt/c/...` → `[C:\...](file:///C:/...)`); espaço no URI vira `%20`. Clique abre no app padrão do Windows (plugin herdr `herdr-windows-paths`). Em comandos shell, manter path Linux.
 - "Make a note" => edit `AGENTS.md` (shortcut; not a blocker). Ignore `CLAUDE.md`.
 - Bugs: add regression test when it fits.
 - Commits: Conventional Commits (`feat|fix|refactor|build|ci|chore|docs|style|perf|test`).
