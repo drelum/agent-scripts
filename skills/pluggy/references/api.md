@@ -7,6 +7,13 @@ Referência consultada em 01/10/2026. Base: `https://api.pluggy.ai`.
 com validade de 2 horas. Connect Token não permite produtos detalhados.
 [Autenticação](https://docs.pluggy.ai/en/reference/authentication).
 
+Transporte do setup/autenticação: `curl` (já requerido pelo instalador) respeita
+`HTTPS_PROXY`/`https_proxy` e `NO_PROXY`/`no_proxy`, com CONNECT para destinos HTTPS e
+validação de certificado/hostname ativa. Credenciais enviadas por stdin; corpo da resposta
+capturado só em memória. Não segue redirects, não usa `.curlrc` nem grava chaves TLS.
+Erros omitem corpo/headers/stderr do transporte; sem tentativa de acesso direto após falha
+do proxy. Consultas financeiras continuam delegadas ao Restish com cache HTTP desabilitado.
+
 | Comando gerado | Endpoint GET | Seleção |
 |---|---|---|
 | items-retrieve | `/items/{id}` | Estado e coleta |
@@ -17,6 +24,11 @@ com validade de 2 horas. Connect Token não permite produtos detalhados.
 | bills-list / bills-retrieve | `/bills?accountId=...` / `/bills/{id}` | Conta de cartão; página |
 | investments-list / investments-retrieve | `/investments?itemId=...` / `/investments/{id}` | Tipo; página |
 | investment-transactions-list | `/investments/{id}/transactions` | Página |
+
+Histórico de pagamentos realizados (boletos, Pix, TED e demais modalidades) usa as mesmas
+transações bancárias de `/v2/transactions`, classificadas por `operationType`/`paymentData`.
+Está incluído nesta skill. Endpoints de iniciação/agendamento de pagamentos e emissão de
+cobranças são produtos distintos, fora do escopo; não são necessários para ler esse histórico.
 
 ## Paginação
 

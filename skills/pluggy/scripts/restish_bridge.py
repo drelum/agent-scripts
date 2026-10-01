@@ -1,5 +1,4 @@
 """Autenticação Pluggy e delegação dos comandos gerados ao Restish."""
-import http.client
 import json
 import os
 from pathlib import Path
@@ -34,7 +33,28 @@ OPTIONS = {
 
 def clean_env():
     return {k: v for k, v in os.environ.items()
-            if not k.startswith(("RSH_", "PLUGGY_")) and k != "INFISICAL_TOKEN"}
+            if not k.startswith(("RSH_", "PLUGGY_"))
+            and k not in ("INFISICAL_TOKEN", "SSLKEYLOGFILE")}
+
+
+def https_json(url, payload=None):
+    """HTTPS por CONNECT quando houver proxy; corpo/segredos só em pipes/memória."""
+    command = ["curl", "--disable", "--silent", "--show-error",
+               "--connect-timeout", "15", "--max-time", "30", "--proto", "=https",
+               "--write-out", "\n%{http_code}", "--url", url]
+    body = b""
+    if payload is not None:
+        command += ["--header", "Content-Type: application/json", "--data-binary", "@-"]
+        body = json.dumps(payload).encode()
+    # --disable primeiro impede .curlrc de habilitar logs, arquivos ou --insecure.
+    result = subprocess.run(command, input=body, env=clean_env(), capture_output=True,
+                            timeout=35)
+    if result.returncode:
+        raise RuntimeError(f"Transporte HTTPS falhou (curl {result.returncode}); confira proxy e TLS.")
+    response, status = result.stdout.rsplit(b"\n", 1)
+    if status != b"200":
+        raise RuntimeError(f"HTTPS HTTP {int(status)}")
+    return json.loads(response)
 
 
 def curate(spec):
@@ -59,12 +79,7 @@ def curate(spec):
 
 def setup():
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
-    c = http.client.HTTPSConnection("docs.pluggy.ai", timeout=30)
-    c.request("GET", "/openapi/pluggy-api.json")
-    r = c.getresponse()
-    if r.status != 200:
-        raise RuntimeError(f"OpenAPI HTTP {r.status}")
-    spec = curate(json.loads(r.read()))
+    spec = curate(https_json("https://docs.pluggy.ai/openapi/pluggy-api.json"))
     (STATE / "openapi.json").write_text(json.dumps(spec))
     apis = {}
     for name, pagination in (
@@ -132,15 +147,11 @@ def main(args):
         for key in ("PLUGGY_CLIENT_ID", "PLUGGY_CLIENT_SECRET"):
             if not os.environ.get(key):
                 raise ValueError(f"Variável ausente: {key}")
-        c = http.client.HTTPSConnection("api.pluggy.ai", timeout=30)
-        c.request("POST", "/auth", json.dumps({
+        auth = https_json("https://api.pluggy.ai/auth", {
             "clientId": os.environ["PLUGGY_CLIENT_ID"],
             "clientSecret": os.environ["PLUGGY_CLIENT_SECRET"],
-        }), {"Content-Type": "application/json"})
-        r = c.getresponse()
-        if r.status != 200:
-            raise RuntimeError(f"Autenticação HTTP {r.status}")
-        env["PLUGGY_API_KEY"] = json.loads(r.read())["apiKey"]
+        })
+        env["PLUGGY_API_KEY"] = auth["apiKey"]
         args = [os.environ.get("PLUGGY_ITEM_ID", "") if a == "@item" else a for a in args]
         if "" in args:
             raise ValueError("Variável ausente: PLUGGY_ITEM_ID")

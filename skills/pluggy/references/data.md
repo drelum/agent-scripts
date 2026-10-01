@@ -1,6 +1,6 @@
 # Interpretação financeira
 
-Read when: analisar saldos, gastos de cartão, faturas, compras parceladas, patrimônio ou movimentos de investimentos.
+Read when: analisar saldos, histórico de pagamentos, gastos de cartão, faturas, compras parceladas, patrimônio ou movimentos de investimentos.
 
 ## Contas e cartões
 
@@ -20,7 +20,22 @@ Não somar saldo de cartão como patrimônio positivo. Em conectores Open Financ
 
 [Transações](https://docs.pluggy.ai/en/docs/products/transactions), [faturas](https://docs.pluggy.ai/en/docs/products/credit-card-bills), [parcelas](https://docs.pluggy.ai/en/docs/products/credit-card-installments).
 
-## Boletos pagos
+## Histórico de pagamentos
+
+Inclui pagamentos já registrados nas transações das contas: boletos, Pix, TED, DOC e
+outras modalidades disponíveis. Para pagamentos enviados e lançados, selecionar DEBIT/POSTED;
+usar `operationType` e `paymentData.paymentMethod` para a modalidade. Sem classificação
+estruturada, tratar descrição como indício e informar a limitação. Estornos/créditos requerem
+conciliação separada; DEBIT/POSTED não garante ausência de estorno posterior.
+
+Pagamentos de fatura podem aparecer como saída na conta BANK, crédito no cartão CREDIT
+e em `Bill.payments`: são representações do mesmo evento, não três gastos. Transferências
+entre contas próprias também não representam necessariamente consumo. Campos de pagador,
+beneficiário, identificadores e motivo variam conforme instituição. Este histórico faz parte
+da leitura Open Banking; endpoints de iniciação/agendamento e emissão de cobrança continuam
+fora do escopo. [Dados de pagamento](https://docs.pluggy.ai/pt/docs/products/transactions).
+
+### Boletos pagos
 
 Histórico vem das transações BANK, selecionando DEBIT/POSTED com `operationType=BOLETO`,
 `paymentData.paymentMethod=BOLETO` ou `boletoMetadata` presente. Estes sinais identificam

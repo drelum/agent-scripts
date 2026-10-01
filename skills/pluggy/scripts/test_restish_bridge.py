@@ -12,7 +12,7 @@ class BridgeTests(unittest.TestCase):
         result = subprocess.CompletedProcess([], 0, stdout=b'help', stderr=b'')
         with patch.dict(os.environ, {}, clear=True), \
              patch.object(bridge.subprocess, 'run', return_value=result) as run, \
-             patch.object(bridge.http.client, 'HTTPSConnection') as connection, \
+             patch.object(bridge, 'https_json') as connection, \
              patch.object(bridge.sys, 'stdout'):
             for args in (['--help-all'], ['investments-list', '--help-all']):
                 self.assertEqual(bridge.main(args), 0)
@@ -34,7 +34,8 @@ class BridgeTests(unittest.TestCase):
 
     def test_environment_drops_ambient_secrets_and_restish_overrides(self):
         with patch.dict(os.environ, {"PLUGGY_API_KEY": "fixture", "INFISICAL_TOKEN": "fixture",
-                                    "RSH_SERVER": "other", "PATH": "/bin"}, clear=True):
+                                    "RSH_SERVER": "other", "SSLKEYLOGFILE": "/unused",
+                                    "PATH": "/bin"}, clear=True):
             self.assertEqual(bridge.clean_env(), {"PATH": "/bin"})
 
     def test_curated_spec_only_selected_gets_and_no_origin_override(self):
@@ -60,28 +61,22 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(bridge.main(['accounts-list', 'x', '--help']), 0)
             output.buffer.write.assert_called_once()
         with patch.object(bridge.subprocess, 'run', return_value=result), \
-             patch.object(bridge.http.client, 'HTTPSConnection') as connection, \
+             patch.object(bridge, 'https_json', return_value={'apiKey': 'fixture'}), \
              patch.dict(os.environ, {'PLUGGY_CLIENT_ID': 'fixture',
                                      'PLUGGY_CLIENT_SECRET': 'fixture'}, clear=True), \
              patch.object(bridge.sys, 'stdout') as output, \
              patch.object(bridge.sys, 'stderr'):
-            response = connection.return_value.getresponse.return_value
-            response.status = 200
-            response.read.return_value = b'{"apiKey":"fixture"}'
             self.assertEqual(bridge.main(['--injected', 'accounts-list', 'x']), 1)
             output.buffer.write.assert_not_called()
 
     def test_paged_default_and_token_transport(self):
         with patch.object(bridge.subprocess, 'run', return_value=subprocess.CompletedProcess(
                 [], 0, stdout=b'{}', stderr=b'')) as run, \
-             patch.object(bridge.http.client, 'HTTPSConnection') as connection, \
+             patch.object(bridge, 'https_json', return_value={'apiKey': 'fixture-token'}), \
              patch.dict(os.environ, {'PLUGGY_CLIENT_ID': 'fixture-client',
                                      'PLUGGY_CLIENT_SECRET': 'fixture-secret',
                                      'PLUGGY_ITEM_ID': 'fixture-item'}, clear=True), \
              patch.object(bridge.sys, 'stdout'):
-            response = connection.return_value.getresponse.return_value
-            response.status = 200
-            response.read.return_value = b'{"apiKey":"fixture-token"}'
             self.assertEqual(bridge.main(['--injected', 'investments-list', '@item']), 0)
             command = run.call_args.args[0]
             self.assertEqual(command[-2:], ['--page', '1'])
