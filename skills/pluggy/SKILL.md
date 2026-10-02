@@ -57,6 +57,31 @@ Detalhes individuais: `accounts-retrieve`, `transactions-retrieve`, `bills-retri
 - MeuPluggy (conector 200) espelha a conexão original, com atualização diária; não usar PATCH para atualizar o proxy. Banco novo exige outra autorização/Item. `nextAutoSyncAt=null` não prova falha.
 - Null não significa zero; lista vazia não prova inexistência histórica. Cartão é Account `CREDIT`; saldo de cartão não equivale a patrimônio positivo nem necessariamente ao total da fatura.
 
+## Gastos de cartão: responsáveis e pendências
+
+Mapa confirmado por André em **02/10/2026**. Para separar gastos por pessoa, usar os
+últimos quatro dígitos de `creditCardMetadata.cardNumber` de cada transação:
+
+| Final | Responsável | Informação confirmada |
+| --- | --- | --- |
+| 2421 | André Monteiro | Cartão de André |
+| 3264 | André Monteiro | Cartão de André |
+| 2936 | André Monteiro | Cartão virtual de André |
+| 0253 | Gabriella Durbano | Cartão adicional da esposa de André |
+
+Este mapa prevalece sobre inferências a partir do titular da conta, de `Account.number`
+ou da lista `creditData.additionalCards`: esses campos não garantem quem usa cada cartão,
+e a lista de adicionais pode incluir cartões virtuais. Final desconhecido ou ausente:
+manter em “Responsável não identificado” e pedir identificação; não atribuir por perfil
+de compras. Atualizar o mapa quando André informar uma mudança.
+
+**Incluir sempre compras `POSTED` e `PENDING` no total de gastos do período**, por
+preferência de André. Aplicar a mesma regra aos totais por responsável e categoria;
+mostrar o total combinado e separar os subtotais lançados e pendentes, deixando claro
+que os valores pendentes podem mudar. Não restringir o relatório a faturas fechadas.
+Para o significado de pendência, período e prevenção de duplicidade, ler
+[references/data.md](references/data.md#compras-pendentes-no-total).
+
 ## Histórico de pagamentos realizados
 
 Consultar `transactions-list-by-cursor` de cada conta **BANK** relevante. Para saídas já

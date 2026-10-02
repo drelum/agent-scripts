@@ -15,10 +15,30 @@ Não somar saldo de cartão como patrimônio positivo. Em conectores Open Financ
 - `creditCardMetadata` pode trazer parcela atual/total, data de compra, `billId`, previsão de fatura e cartão. Campos variam por instituição.
 - Bill informa total, moeda, vencimento, fechamento, mínimo, encargos e pagamentos. Consultar os lançamentos ligados ao `billId` antes de reconciliar. Não concluir que total da fatura é igual à soma simples de compras: pagamentos, ajustes, encargos e lançamentos faltantes podem explicar diferença.
 - Compra parcelada pode aparecer integralmente ou mês a mês. Não extrapolar parcelas futuras como registros existentes; não inferir vínculo certo entre compras por descrição/valor. Não há identificador universal de agrupamento da compra.
-- `PENDING` pode mudar para `POSTED` e receber vínculo com fatura; não tratar como duas compras. Deduplicar por `id` dentro da fonte; exclusão/recriação com outro ID exige investigação, não heurística automática.
+- Para incluir e interpretar `PENDING` nos gastos, seguir a regra da skill e a seção [Compras pendentes no total](#compras-pendentes-no-total).
 - Documentação do guia afirma que `billPostDate` não é exposto, mas o campo apareceu no JSON da conexão durante exploração. Preservar quando presente, validar o comportamento observado e não garantir disponibilidade universal.
 
 [Transações](https://docs.pluggy.ai/en/docs/products/transactions), [faturas](https://docs.pluggy.ai/en/docs/products/credit-card-bills), [parcelas](https://docs.pluggy.ai/en/docs/products/credit-card-installments).
+
+### Compras pendentes no total
+
+`PENDING` pode representar uma compra ainda não liquidada ou vinculada a uma fatura
+aberta, sem `billId`; sua ausência não exclui a compra do relatório. O status pode
+mudar para `POSTED` e receber vínculo com fatura, e o valor pode ser ajustado ou o
+lançamento removido. O total com pendências representa os gastos conhecidos na
+consulta, não uma fatura fechada nem um pagamento já realizado.
+
+Incluir ambos os status no mesmo recorte de período, por cartão, responsável e
+categoria. Explicitar o critério de data usado: lançamentos datados no mês não são
+necessariamente compras originadas no mês nem a fatura vencendo nele; parcelas podem
+ter `date` diferente de `purchaseDate`. Não incluir parcelas com data futura fora do
+recorte só por terem sido compradas no mês.
+
+Contar cada transação uma vez: deduplicar por `id` dentro da fonte e não somar versões
+pendente e lançada da mesma transação. Exclusão/recriação com outro ID exige
+investigação, não heurística automática. Pagamento de fatura continua separado das
+compras. Essa preferência por incluir pendências é para gastos de cartão; o histórico
+de pagamentos bancários realizados continua usando `DEBIT`/`POSTED`.
 
 ## Histórico de pagamentos
 
