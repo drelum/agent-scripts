@@ -17,10 +17,16 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 - Somente diretivas (global + projetos em `~/Projects`): `./script/ensure_agent_std.sh`
 
 ## Gate de qualidade (padrão)
-- Lint: usar `biome check` (nao usar `pnpm lint`).
-- Incluir `knip` no check para detectar dependencias, exports e arquivos nao utilizados.
-- Exemplo de script `check`:
-  `biome check && pnpm exec tsc -p tsconfig.json --noEmit && VITEST_MAX_WORKERS=3 pnpm test && pnpm dlx knip --no-progress`
+<!-- read_when: Alterar ferramentas, scripts de validação ou instruções de qualidade dos projetos. -->
+
+- Seguir o gate canônico de cada repositório; conferir os scripts e a configuração local. O nome `check` não garante que testes e builds estejam incluídos.
+- Novos projetos TypeScript (frontend, backend Node.js, CLIs e bibliotecas): preferir Vite+ com os defaults oficiais para checagens e testes. Projetos existentes mantêm sua stack até uma migração autorizada; Biome continua válido onde instalado.
+- Em projetos Vite+, `vp check` reúne formatação, lint e tipos. Confirmar `lint.options.typeAware: true` e `typeCheck: true`; consultar a [documentação oficial](https://viteplus.dev/guide/check).
+- O gate completo acrescenta testes com no máximo três workers, Knip e builds aplicáveis. Preferir versões e comandos locais; manter `tsc` adicional apenas quando atende outro escopo ou requisito de build/declarações.
+- Adaptar build e desenvolvimento ao alvo: `vp build` para aplicações web e [`vp pack`/tsdown](https://viteplus.dev/guide/pack) quando adequado ao empacotamento Node.js, CLIs ou bibliotecas. Manter os comandos de runtime, build e deploy exigidos pelo framework ou provedor; o backend pode usar Vite+ para checagens e testes com build próprio.
+- Exemplo mínimo com pnpm: `check`: `vp check`; `test`: `vp test run --maxWorkers=3`; `gate`: `pnpm check && pnpm test && pnpm exec knip --no-progress && pnpm build`. Incluir os demais gates do workspace; não sobrescrever scripts existentes com este exemplo.
+- Corrigir avisos sem ocultá-los com `--quiet`, desligar regras ou reduzir a cobertura. Reportar dívida preexistente e exceções aprovadas separadamente.
+- O Painel já usa Vite+ e seu `pnpm gate` inclui os agentes e o Eve Kit externo; cada componente conserva suas verificações próprias.
 
 ## Exclusão recuperável
 - `./bin/trash <caminho> [...]`: wrapper canônico para `gio trash`; publicar como `~/.local/bin/trash` para funcionar também em agentes e shells não interativos.
@@ -43,9 +49,11 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 - `./bin/eve-eval-isolated [argumentos]`: em Linux/WSL com `flock` (`util-linux`), executa `eve eval` local com `.eve/.workflow-data` novo, preserva `.eve/m` e arquiva os stores anterior e produzido em `.eve/eval-isolated-runs/`.
 - `./bin/eve-eval-remote-production --audience <aud> -- <comando>`: usa a identidade efêmera do `eve-kit`, fixa o deployment Production antes/depois e invalida a bateria se o alias mudar.
 - Skill canônica: `eve-isolated-evals`. Ela separa isolamento local de workflow e isolamento remoto de identidade/deployment.
+- `eve-experiment`: coordena baseline, hipótese, alteração, bateria e decisão; reutiliza gates, artefatos e deployments quando o estado não mudou.
 
 ## Skills do Codex
 - Fonte canonica unica: `skills/*/SKILL.md`.
+- `linkedin-x-readonly`: consultas de LinkedIn e X via executável global `opencli` no PATH, com perfil `social` explícito e operações exclusivamente de leitura; sem dependência do laboratório.
 - Validação de front matter, campos obrigatórios e nomes duplicados: `./script/validate-skills`
 - Validação antes de cada commit: `git config core.hooksPath hooks`
 - Sincronização completa recomendada: `./script/sync-agent-environment.sh`
@@ -57,16 +65,19 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 - Substituição explícita de diretórios reais com nomes canônicos: `./script/sync-codex-skills.sh --replace-existing`.
 
 ### Skills canônicas
+- `aura-store-data-diagnosis`: diagnóstico somente leitura de divergências de estoque, vendas e custo do ERP; rastreia aquisição, transformação, bases, API e tela, com identidade e horários comparáveis.
 - `aura-posthog`: análise somente leitura do uso do Aura no PostHog (navegação, carrinho, envio de pedido e erros), com descoberta de eventos a cada uso, resolução de e-mail pelo cadastro Aura e mascaramento de tokens; executor em `skills/aura-posthog/scripts/aura-posthog`.
+- `aura-beta-promotion`: prepara e valida promoções do monorepo Beta para as branches oficiais `beta` do Aura e Aura UI, com snapshot subtree, autorização final, monitoramento do provedor e smoke funcional.
 - `aura-packaging`: diagnostica empacotamento de um EAN (cotação, NF, venda, custo) via script somente leitura; CNPJ padrão `05101867000157`.
-- `autoreview`: revisão source-aware isolada com Codex ou Claude; valida a resposta estruturada internamente e entrega relatório Markdown; Codex usa `gpt-5.6-sol` com reasoning `high` por padrão; suporta mudanças locais, branch e commit.
+- `autoreview`: revisão source-aware isolada com Codex ou Claude; aceita segredos e caminhos sensíveis no bundle/repositório, sem herdar credenciais do ambiente; valida a resposta estruturada internamente e entrega relatório Markdown; Codex usa `gpt-6.1-sol` com reasoning `high` por padrão.
 - `behavior-validator`: temporariamente desabilitada por `skills/behavior-validator/.disabled`.
 - `codex-session-restorer`: localiza sessões interativas recentes do Codex e reabre cada uma em uma aba nomeada do Windows Terminal a partir do WSL.
+- `eve-experiment`: executa ciclos medidos de melhoria de agentes EVE sem repetir gates, builds ou deployments do mesmo estado.
 - `eve-isolated-evals`: executa baterias locais sobre workflow store novo e baterias remotas em Production com identidade efêmera e pin de deployment.
 - `implementation-delegator`: permite ao Claude Code delegar uma implementação delimitada a um worker Codex com acesso total ao repositório, progresso incremental e sem timeout automático.
 - `second-opinion`: consulta independente com Codex ou Claude e acesso amplo ao repositório informado; produz laudo Markdown livre e coerente com o tema, progresso/heartbeat em stderr, timeout interno e logs incrementais, instruído a não alterar estado, sem usar clipboard.
 - `skill-cleaner`: auditoria de inventário, orçamento de contexto, uso recente, duplicações e descrições; `--no-logs` desativa a leitura de histórico.
-- `visual-inspection`: browser QA em worker Codex externo, fixado em `gpt-5.6-sol` com reasoning `medium`; recebe handoff completo e acesso total ao repositório, usa `agent-browser`, sessão isolada, progresso/heartbeat em stderr, timeout interno, evidências em `/tmp` e relatório Markdown.
+- `visual-inspection`: browser QA em worker Codex externo, fixado em `gpt-6-luna` com reasoning `medium` e Fast habilitado por padrão; recebe handoff completo e acesso total ao repositório, usa `agent-browser`, sessão isolada, progresso/heartbeat em stderr, timeout interno, evidências em `/tmp` e relatório Markdown.
 - `windows-chrome-browser`: controla somente páginas e abas em perfis persistentes do Chrome Windows a partir do WSL, preservando autenticação humana e isolando CDP, sessão e aba.
 
 Uma skill com marcador `.disabled` permanece na fonte canônica, mas não é publicada para Codex ou Claude. Remova o marcador e execute a sincronização para reativá-la.
