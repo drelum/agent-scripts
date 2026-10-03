@@ -27,7 +27,7 @@ Validate observable behavior without inspecting source. Judge the running produc
 ## Browser Targets on WSL
 
 - For web and Electron targets, invoke the `visual-inspection` skill with the ready URL and this behavior contract. Do not run browser commands in the main validator.
-- `visual-inspection` delegates to a full-access Codex worker fixed to `gpt-5.6-sol` with reasoning `medium`; the main agent supplies a complete handoff and the repository path. Browser interaction uses only `agent-browser`. Do not fall back to Playwright, Puppeteer, or an in-app browser.
+- `visual-inspection` delegates to a full-access Codex worker fixed to `gpt-6-luna` with reasoning `high`; the main agent supplies a complete handoff and the repository path. Browser interaction uses only `agent-browser`. Do not fall back to Playwright, Puppeteer, or an in-app browser.
 - Use one worker and one isolated named browser session for each validation; never share it with another process or validation.
 - Prefer accessibility snapshots and stable element references for interaction. Capture screenshots or video only when the contract requires visual evidence.
 - Reuse authentication only through an approved `agent-browser` vault or profile. Redact cookies, tokens, credentials, and private data.

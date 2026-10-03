@@ -15,10 +15,10 @@ from pathlib import Path
 from typing import TextIO
 from zoneinfo import ZoneInfo
 
-from .contract import VisualInspectionError
+from .contract import FINALIZATION_FRACTION, VisualInspectionError
 
 
-CODEX_MODEL = "gpt-5.6-sol"
+CODEX_MODEL = "gpt-6-luna"
 CODEX_REASONING_EFFORT = "medium"
 MAX_TIMEOUT_SECONDS = 7 * 60
 DEFAULT_TIMEOUT_SECONDS = MAX_TIMEOUT_SECONDS
@@ -56,7 +56,7 @@ def worker_env(
 def codex_command(
     repository: Path,
     output_file: Path,
-    fast: bool = False,
+    fast: bool = True,
 ) -> list[str]:
     command = [
         "codex",
@@ -91,7 +91,7 @@ def run_worker(
     evidence_dir: Path,
     prompt: str,
     session: str,
-    fast: bool = False,
+    fast: bool = True,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
     progress: Callable[[str], None] | None = None,
@@ -107,6 +107,10 @@ def run_worker(
     output_file = evidence_dir / "worker-report.md"
     started_at = datetime.now(SAO_PAULO)
     started_monotonic = time.monotonic()
+    deadline = started_monotonic + timeout_seconds
+    finalize_at = deadline - timeout_seconds * FINALIZATION_FRACTION
+    environment = worker_env(session, evidence_dir)
+    environment["VISUAL_INSPECTION_FINALIZE_AT"] = str(finalize_at)
     _notify(progress, started_monotonic, "worker started")
     event_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
     writer_errors: list[str] = []
@@ -125,7 +129,7 @@ def run_worker(
                     stderr=subprocess.PIPE,
                     text=True,
                     bufsize=1,
-                    env=worker_env(session, evidence_dir),
+                    env=environment,
                     start_new_session=True,
                 )
         except OSError as error:
@@ -156,13 +160,25 @@ def run_worker(
         writer.start()
 
         open_streams = {"stdout", "stderr"}
-        deadline = started_monotonic + timeout_seconds
         next_heartbeat = started_monotonic + heartbeat_seconds
         last_activity = started_monotonic
         step_ids: dict[str, int] = {}
         timed_out = False
+        finalization_announced = False
         while open_streams or process.poll() is None:
             now = time.monotonic()
+            if (
+                not finalization_announced
+                and now >= finalize_at
+                and now < deadline
+                and process.poll() is None
+            ):
+                finalization_announced = True
+                _notify(
+                    progress,
+                    started_monotonic,
+                    "janela de fechamento iniciada; prazo disponível no relógio do worker",
+                )
             if not timed_out and now >= deadline and process.poll() is None:
                 timed_out = True
                 _notify(
@@ -174,6 +190,7 @@ def run_worker(
             wait_for = min(
                     0.25,
                     max(0.01, next_heartbeat - now),
+                    max(0.01, finalize_at - now) if not finalization_announced else 0.25,
                     max(0.01, deadline - now) if not timed_out else 0.25,
             )
             try:
@@ -350,7 +367,7 @@ def _seconds_label(seconds: float) -> str:
     return f"{seconds:g}s"
 
 
-def command_preview(repository: Path, fast: bool = False) -> list[str]:
+def command_preview(repository: Path, fast: bool = True) -> list[str]:
     return codex_command(repository, Path("<report.md>"), fast)
 
 

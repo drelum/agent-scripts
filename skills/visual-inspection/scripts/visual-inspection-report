@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from visual_inspection_lib.reporting import assess_report
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Conferir laudo de texto ou registrar um critério sem executar browser.")
+    parser.add_argument("action", choices=("check", "checkpoint"))
+    parser.add_argument("report", type=Path, nargs="?")
+    parser.add_argument("--evidence-dir", type=Path, required=True)
+    args = parser.parse_args()
+    root = args.evidence_dir.resolve()
+    if not root.is_dir() or Path("/tmp") not in root.parents:
+        parser.error("o diretório de evidências deve existir sob /tmp")
+    if args.action == "check":
+        if args.report is None:
+            parser.error("check exige o arquivo do laudo")
+        path = args.report.resolve()
+        if root not in path.parents or not path.is_file():
+            parser.error("o laudo deve existir dentro do diretório da execução")
+        result = assess_report(path.read_text(encoding="utf-8"), root)
+        print(f"Conclusão para revisão: {result.status.upper()}")
+        print("Resposta de texto: o cliente deve avaliar critérios e evidências.")
+        for warning in result.warnings:
+            print(f"- {warning}")
+        return 1 if result.warnings else 0
+    if args.report is not None:
+        parser.error("checkpoint recebe o registro por stdin")
+    text = sys.stdin.read().strip()
+    if not text:
+        parser.error("registro vazio")
+    timestamp = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M:%S")
+    fd = os.open(root / "progress.md", os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as file:
+        file.write(f"\n## Registro — {timestamp} (São Paulo)\n\n{text}\n")
+    print("Critério registrado em progress.md; sem aprovação automática.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

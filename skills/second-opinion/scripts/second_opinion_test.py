@@ -18,6 +18,7 @@ from second_opinion_lib.consultation import (
     validate_report,
 )
 from second_opinion_lib.repository import resolve_repository
+from second_opinion_lib.runtime import create_run, resolve_output_root
 from second_opinion_lib.structured_engines import (
     claude_command,
     codex_command,
@@ -88,11 +89,18 @@ class ConsultationCase(unittest.TestCase):
         fast = codex_command(self.repo, Path("report.md"), None, fast=True)
         self.assertNotIn("fast_mode", standard)
         self.assertNotIn('service_tier="fast"', standard)
-        self.assertEqual(standard[standard.index("--model") + 1], "gpt-6-sol")
-        self.assertEqual(fast[fast.index("--model") + 1], "gpt-6-sol")
+        self.assertEqual(standard[standard.index("--model") + 1], "gpt-6.1-sol")
+        self.assertEqual(fast[fast.index("--model") + 1], "gpt-6.1-sol")
         self.assertIn('model_reasoning_effort="high"', fast)
         self.assertEqual(fast[fast.index("--enable") + 1], "fast_mode")
         self.assertIn('service_tier="fast"', fast)
+
+    def test_codex_reasoning_effort_override(self) -> None:
+        default = codex_command(self.repo, Path("report.md"), None)
+        medium = codex_command(self.repo, Path("report.md"), "gpt-6-astra", reasoning_effort="medium")
+        self.assertIn('model_reasoning_effort="high"', default)
+        self.assertIn('model_reasoning_effort="medium"', medium)
+        self.assertEqual(medium[medium.index("--model") + 1], "gpt-6-astra")
 
     def test_fast_is_rejected_for_claude(self) -> None:
         result = subprocess.run(
@@ -144,6 +152,48 @@ class ConsultationCase(unittest.TestCase):
         self.assertNotIn("--output-schema", result.stdout)
         self.assertNotIn("--json-schema", result.stdout)
 
+    def test_output_root_help_explains_restriction_and_default(self) -> None:
+        result = subprocess.run(
+            [str(self.runner), "--help"], capture_output=True, text=True, check=True
+        )
+        self.assertIn("Raiz sob /tmp", result.stdout)
+        self.assertIn("/tmp/second-opinion", result.stdout)
+
+    def test_invalid_output_root_is_rejected_before_launch_even_in_dry_run(self) -> None:
+        for dry_run in ([], ["--dry-run"]):
+            with self.subTest(dry_run=dry_run):
+                result = subprocess.run(
+                    [
+                        str(self.runner), "--repo", str(self.repo),
+                        "--output-root", "/var/second-opinion-not-created", *dry_run,
+                    ],
+                    input="Question: Should we split this module?",
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("advisor output must be under /tmp", result.stderr)
+                self.assertIn("omita --output-root", result.stderr)
+                self.assertNotIn("run initialized", result.stderr)
+
+    def test_output_root_resolves_symlinks_and_keeps_dry_run_read_only(self) -> None:
+        outside = self.repo / "outside-link"
+        outside.symlink_to("/var", target_is_directory=True)
+        with self.assertRaisesRegex(ConsultationError, "under /tmp"):
+            resolve_output_root(outside / "opinion")
+        root = self.repo / "allowed-runs"
+        self.assertEqual(resolve_output_root(root), root)
+        result = subprocess.run(
+            [str(self.runner), "--repo", str(self.repo), "--dry-run",
+             "--output-root", str(root)],
+            input="Question: Should we split this module?",
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(root.exists())
+        _, run_dir = create_run(root)
+        self.assertEqual(run_dir.parent, root)
+        self.assertEqual(stat.S_IMODE(run_dir.stat().st_mode), 0o700)
+
     def test_dry_run_exposes_fast_without_changing_model_or_reasoning(self) -> None:
         result = subprocess.run(
             [
@@ -163,7 +213,7 @@ class ConsultationCase(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Fast: true", result.stdout)
-        self.assertIn("gpt-6-sol", result.stdout)
+        self.assertIn("gpt-6.1-sol", result.stdout)
         self.assertIn('model_reasoning_effort="high"', result.stdout)
         self.assertIn("fast_mode", result.stdout)
         self.assertIn('service_tier="fast"', result.stdout)

@@ -11,11 +11,19 @@ from .consultation import ConsultationError
 SAO_PAULO = ZoneInfo("America/Sao_Paulo")
 
 
-def create_run(output_root: Path | None) -> tuple[str, Path]:
+def resolve_output_root(output_root: Path | None) -> Path:
     root = (output_root or Path("/tmp/second-opinion")).expanduser().resolve()
     temporary_root = Path("/tmp").resolve()
     if root != temporary_root and temporary_root not in root.parents:
-        raise ConsultationError("advisor output must be under /tmp")
+        raise ConsultationError(
+            "advisor output must be under /tmp; "
+            "omita --output-root para usar /tmp/second-opinion"
+        )
+    return root
+
+
+def create_run(output_root: Path | None) -> tuple[str, Path]:
+    root = resolve_output_root(output_root)
     timestamp = datetime.now(SAO_PAULO).strftime("%Y%m%d-%H%M%S")
     suffix = uuid4().hex[:8]
     run_id = f"opinion-{timestamp}-{suffix}"

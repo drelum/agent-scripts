@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import math
+import os
+import signal
+import shlex
+import sys
+from pathlib import Path
+
+from implementation_delegator_lib.contract import (
+    DelegationError,
+    correction_prompt,
+    implementation_prompt,
+    validate_work_order,
+)
+from implementation_delegator_lib.engine import (
+    DEFAULT_CODEX_MODEL,
+    DEFAULT_HEARTBEAT_SECONDS,
+    EngineError,
+    codex_command,
+    run_codex,
+)
+from implementation_delegator_lib.repository import capture_state, resolve_repository
+from implementation_delegator_lib.runtime import create_run
+
+
+MAX_WORK_ORDER_BYTES = 512 * 1024
+INTERRUPTION_REQUESTED = False
+
+
+def positive_seconds(value: str) -> float:
+    try:
+        seconds = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a number greater than zero") from error
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return seconds
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Delegate a bounded implementation from Claude Code to Codex."
+    )
+    parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument(
+        "--model",
+        help=f"Codex model override (default: {DEFAULT_CODEX_MODEL}).",
+    )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use the Codex Fast service tier without changing model or reasoning effort.",
+    )
+    parser.add_argument(
+        "--resume",
+        metavar="SESSION_ID",
+        help="Resume the same Codex session for a bounded correction.",
+    )
+    parser.add_argument("--output-root", type=Path)
+    parser.add_argument(
+        "--heartbeat-seconds",
+        type=positive_seconds,
+        default=DEFAULT_HEARTBEAT_SECONDS,
+        help="Progress heartbeat interval on stderr (default: 30).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate input and show the invocation without launching Codex.",
+    )
+    return parser.parse_args()
+
+
+def progress(message: str) -> None:
+    print(f"implementation-delegator {message}", file=sys.stderr, flush=True)
+
+
+def interrupt_runner(_signum: int, _frame: object) -> None:
+    global INTERRUPTION_REQUESTED
+    INTERRUPTION_REQUESTED = True
+
+
+def interruption_requested() -> bool:
+    return INTERRUPTION_REQUESTED
+
+
+def dry_run_report(
+    repository: Path,
+    work_order_bytes: int,
+    heartbeat_seconds: float,
+    fast: bool,
+    resume: str | None,
+    command: list[str],
+) -> str:
+    rendered = " ".join(shlex.quote(part) for part in command)
+    return f"""# Implementation Delegator — dry run
+
+- Direction: `Claude Code -> Codex`
+- Repository: `{repository}`
+- Repository access: full
+- Work order: {work_order_bytes} bytes
+- Runtime timeout: none
+- Heartbeat: {heartbeat_seconds:g}s
+- Fast: {str(fast).lower()}
+- Session: `{resume or 'fresh'}`
+
+```sh
+{rendered}
+```
+"""
+
+
+def main() -> int:
+    os.umask(0o077)
+    signal.signal(signal.SIGINT, interrupt_runner)
+    signal.signal(signal.SIGTERM, interrupt_runner)
+    signal.signal(signal.SIGHUP, interrupt_runner)
+    args = parse_args()
+    work_order = sys.stdin.read()
+    try:
+        validate_work_order(work_order, MAX_WORK_ORDER_BYTES)
+        repository = resolve_repository(args.repo)
+        preview = codex_command(
+            repository,
+            Path("<report.md>"),
+            args.model,
+            fast=args.fast,
+            resume=args.resume,
+        )
+        if args.dry_run:
+            print(
+                dry_run_report(
+                    repository,
+                    len(work_order.encode("utf-8")),
+                    args.heartbeat_seconds,
+                    args.fast,
+                    args.resume,
+                    preview,
+                ),
+                end="",
+            )
+            return 0
+
+        run_id, run_dir = create_run(args.output_root)
+        capture_state(repository, run_dir / "state-before.txt")
+        selected_model = args.model or ("session-model" if args.resume else DEFAULT_CODEX_MODEL)
+        progress(
+            f"run initialized; model={selected_model}; fast={str(args.fast).lower()}; "
+            f"session={args.resume or 'fresh'}; run={run_id}; output_dir={run_dir}; timeout=none"
+        )
+        events_path = run_dir / "worker-events.jsonl"
+        progress(f"follow raw events: tail -n 200 -f {shlex.quote(str(events_path))}")
+
+        prompt = (
+            correction_prompt(work_order)
+            if args.resume
+            else implementation_prompt(work_order)
+        )
+        try:
+            result = run_codex(
+                repository,
+                prompt,
+                run_dir,
+                args.model,
+                fast=args.fast,
+                resume=args.resume,
+                heartbeat_seconds=args.heartbeat_seconds,
+                progress=progress,
+                interrupted=interruption_requested,
+            )
+        finally:
+            capture_state(repository, run_dir / "state-after.txt")
+        report_path = run_dir / "report.md"
+        report_path.write_text(result.report.rstrip() + "\n", encoding="utf-8")
+        print(result.report.rstrip())
+        progress(
+            f"completed; status=complete; duration={result.duration_seconds:.3f}s; "
+            f"session={result.session_id}; report={report_path}"
+        )
+        return 0
+    except KeyboardInterrupt:
+        print("implementation-delegator: interrupted; worker process group terminated", file=sys.stderr)
+        return 130
+    except (DelegationError, EngineError, UnicodeDecodeError) as error:
+        print(f"implementation-delegator: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

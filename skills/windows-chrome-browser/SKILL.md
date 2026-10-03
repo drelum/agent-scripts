@@ -43,7 +43,7 @@ After `start`, ask Andre to authenticate when required, then rerun `status`. Nev
 <skill-dir>/scripts/windows-chrome-browser run --profile aitrus --session gmail-triage -- snapshot -i -c -d 3
 ```
 
-Re-snapshot after page changes. Keep the default viewport unless the user or task specifies another; visual checks must support at least `1024x768`.
+Re-snapshot after page changes. Use viewport `1366x768` by default unless the user or task specifies another.
 
 5. Close only tabs created by the current task, using `tab close <targetId>`. Leave Chrome, profiles, human tabs, and unrelated sessions open.
 

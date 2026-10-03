@@ -12,8 +12,8 @@ import tomllib
 with open(sys.argv[1], "rb") as file:
     agent = tomllib.load(file)
 
-assert agent["model"] == "gpt-5.6-sol"
-assert agent["model_reasoning_effort"] == "medium"
+assert agent["model"] == "gpt-6-luna"
+assert agent["model_reasoning_effort"] == "high"
 assert agent["name"] == "visual_inspector"
 assert agent["description"]
 assert agent["developer_instructions"]

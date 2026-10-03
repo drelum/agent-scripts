@@ -17,7 +17,7 @@ from typing import Any, TextIO
 from zoneinfo import ZoneInfo
 
 
-DEFAULT_CODEX_MODEL = "gpt-6-sol"
+DEFAULT_CODEX_MODEL = "gpt-6.1-sol"
 DEFAULT_CODEX_REASONING_EFFORT = "high"
 DEFAULT_TIMEOUT_SECONDS = 15 * 60
 DEFAULT_HEARTBEAT_SECONDS = 30
@@ -66,6 +66,7 @@ def codex_command(
     output_file: Path,
     model: str | None,
     fast: bool = False,
+    reasoning_effort: str | None = None,
 ) -> list[str]:
     command = [
         "codex",
@@ -94,7 +95,7 @@ def codex_command(
         "--config",
         'web_search="live"',
         "--config",
-        f'model_reasoning_effort="{DEFAULT_CODEX_REASONING_EFFORT}"',
+        f'model_reasoning_effort="{reasoning_effort or DEFAULT_CODEX_REASONING_EFFORT}"',
         "--model",
         model or DEFAULT_CODEX_MODEL,
         "--output-last-message",
@@ -135,6 +136,7 @@ def run_structured_engine(
     model: str | None,
     run_dir: Path,
     fast: bool = False,
+    reasoning_effort: str | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
     progress: Callable[[str], None] | None = None,
@@ -149,7 +151,7 @@ def run_structured_engine(
     with tempfile.TemporaryDirectory(prefix="second-opinion-engine-") as temp:
         output_file = Path(temp) / "report.md"
         command = (
-            codex_command(workspace, output_file, model, fast)
+            codex_command(workspace, output_file, model, fast, reasoning_effort)
             if engine == "codex"
             else claude_command(model)
         )
@@ -443,10 +445,11 @@ def command_preview(
     workspace: Path,
     model: str | None,
     fast: bool = False,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     if engine == "claude":
         return {"engine": engine, "command": claude_command(model)}
     return {
         "engine": engine,
-        "command": codex_command(workspace, Path("<report.md>"), model, fast),
+        "command": codex_command(workspace, Path("<report.md>"), model, fast, reasoning_effort),
     }

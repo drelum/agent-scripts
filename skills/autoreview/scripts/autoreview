@@ -10,18 +10,33 @@ from pathlib import Path
 from autoreview_lib.bundle import BundleError, build_bundle
 from autoreview_lib.engines import (
     CODEX_SAFE_PROMPT_CHARS,
+    DEFAULT_CODEX_MODEL,
     DEFAULT_HEARTBEAT_SECONDS,
     DEFAULT_OUTPUT_ROOT,
     DEFAULT_TIMEOUT_SECONDS,
+    UNAVAILABLE_EVE_KIT_REFERENCE,
     EngineError,
     command_preview,
+    load_eve_kit_reference,
     review_prompt,
     run_engine,
     validate_prompt_size,
 )
+from autoreview_lib.eve_detection import detect_eve
+from autoreview_lib.eve_docs import (
+    EveDocsError,
+    refresh_eve_docs,
+    snapshot_path_from_reference,
+)
+from autoreview_lib.follow_up import (
+    FollowUpError,
+    prepare_follow_up,
+    write_run_context,
+)
 from autoreview_lib.report import ReportError, extract_report, render_markdown
 
 DEFAULT_MAX_BUNDLE_KB = 960
+UNAVAILABLE_EVE_DOCS_REFERENCE = '{"available":false,"fresh":false,"path":null,"sources":[]}'
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,6 +46,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base")
     parser.add_argument("--commit", default="HEAD")
     parser.add_argument(
+        "--follow-up",
+        type=Path,
+        metavar="REPORT_OR_RUN_DIR",
+        help="Verify an accepted finding using artifacts from one previous full review.",
+    )
+    parser.add_argument(
+        "--accepted-finding",
+        action="append",
+        default=[],
+        type=int,
+        metavar="NUMBER",
+        help="1-based finding number to verify; repeat when multiple findings were accepted.",
+    )
+    parser.add_argument(
         "--path",
         action="append",
         default=[],
@@ -39,7 +68,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        help="Optional engine model override; Codex defaults to gpt-5.6-sol, Claude to its CLI default.",
+        help=f"Optional engine model override; Codex defaults to {DEFAULT_CODEX_MODEL}, Claude to its CLI default.",
     )
     parser.add_argument(
         "--fast",
@@ -60,6 +89,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.fast and args.engine != "codex":
         parser.error("--fast is valid only with --engine codex")
+    if args.accepted_finding and not args.follow_up:
+        parser.error("--accepted-finding requires --follow-up")
     return args
 
 
@@ -85,10 +116,57 @@ def main() -> int:
             max_bundle_bytes=args.max_bundle_kb * 1024,
             paths=args.path,
         )
-        prompt = review_prompt(bundle.label, bundle.content)
+        eve_detected = detect_eve(repo, bundle.content)
+        # O follow-up compara com o Eve Kit atual sempre que a revisão completa detectou EVE.
+        eve_kit_reference = (
+            load_eve_kit_reference()
+            if eve_detected or args.follow_up
+            else UNAVAILABLE_EVE_KIT_REFERENCE
+        )
+        follow_up = None
+        if args.follow_up:
+            follow_up = prepare_follow_up(
+                args.follow_up,
+                repo=repo,
+                engine=args.engine,
+                target=bundle.label,
+                current_review_identity=bundle.identity,
+                current_bundle=bundle.content,
+                current_eve_kit_reference=eve_kit_reference,
+                accepted_findings=args.accepted_finding,
+            )
+            prompt = follow_up.prompt
+            eve_docs_reference = follow_up.eve_docs_reference
+            eve_detected = follow_up.eve_detected
+        elif not eve_detected:
+            eve_docs_reference = UNAVAILABLE_EVE_DOCS_REFERENCE
+            prompt = review_prompt(bundle.label, bundle.content, eve_detected=False)
+        else:
+            eve_docs = refresh_eve_docs()
+            eve_docs_reference = eve_docs.reference
+            if eve_docs.warning:
+                print(
+                    f"autoreview: EVE documentation snapshot warning: {eve_docs.warning}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            prompt = review_prompt(
+                bundle.label,
+                bundle.content,
+                eve_kit_reference,
+                eve_docs_reference,
+            )
+        eve_docs_path = snapshot_path_from_reference(eve_docs_reference)
         prompt_size = validate_prompt_size(args.engine, prompt)
         if args.dry_run:
-            preview = command_preview(args.engine, repo, args.model, args.fast)
+            preview = command_preview(
+                args.engine,
+                repo,
+                args.model,
+                args.fast,
+                eve_docs_path,
+                eve_detected,
+            )
             print(
                 "\n".join(
                     [
@@ -96,8 +174,19 @@ def main() -> int:
                         "",
                         "# Escopo",
                         "",
+                        f"- Tipo: {'follow-up' if follow_up else 'full'}",
                         f"- Alvo: {bundle.label}",
+                        (
+                            f"- Documentação EVE: {eve_docs_path or 'fallback web'}"
+                            if eve_detected
+                            else "- EVE: não detectado; snapshot e pesquisa omitidos"
+                        ),
                         f"- Bundle: {len(bundle.content.encode('utf-8'))} bytes",
+                        *(
+                            [f"- Delta da correção: {len(follow_up.correction_delta.encode('utf-8'))} bytes"]
+                            if follow_up
+                            else []
+                        ),
                         (
                             f"- Prompt: {prompt_size} / {CODEX_SAFE_PROMPT_CHARS} caracteres seguros"
                             if args.engine == "codex"
@@ -123,6 +212,8 @@ def main() -> int:
             heartbeat_seconds=args.heartbeat_seconds,
             stream_engine_output=args.stream_engine_output,
             output_root=args.output_root,
+            additional_read_path=eve_docs_path,
+            eve_web_fallback=eve_detected,
             progress=lambda message: print(f"autoreview: {message}", file=sys.stderr, flush=True),
         )
         report = extract_report(run.result)
@@ -133,6 +224,23 @@ def main() -> int:
             target=bundle.label,
             duration_seconds=run.duration_seconds,
             report_file=str(report_file),
+            review_type="follow-up" if follow_up else "full",
+        )
+        write_run_context(
+            run.run_dir,
+            repo=repo,
+            engine=args.engine,
+            target=bundle.label,
+            review_identity=bundle.identity,
+            bundle=bundle.content,
+            report=report,
+            review_type="follow-up" if follow_up else "full",
+            eve_kit_reference=(
+                follow_up.eve_kit_reference if follow_up else eve_kit_reference
+            ),
+            eve_docs_reference=eve_docs_reference,
+            parent_run=follow_up.parent_run if follow_up else None,
+            accepted_findings=follow_up.accepted_findings if follow_up else (),
         )
         report_file.write_text(rendered, encoding="utf-8")
         print(rendered, end="")
@@ -142,7 +250,14 @@ def main() -> int:
             return 0
         print("autoreview clean: no actionable findings reported", file=sys.stderr)
         return 0
-    except (BundleError, EngineError, ReportError, UnicodeDecodeError) as error:
+    except (
+        BundleError,
+        EngineError,
+        EveDocsError,
+        FollowUpError,
+        ReportError,
+        UnicodeDecodeError,
+    ) as error:
         print(f"autoreview: {error}", file=sys.stderr)
         return 2
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implementation Delegator"
+  short_description: "Claude delegates implementation to Codex"
+  default_prompt: "Use $implementation-delegator to delegate this implementation from Claude Code to Codex."

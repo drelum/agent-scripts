@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import stat
@@ -13,6 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from visual_inspection_lib.contract import (
+    BUDGET_CHECK_COMMAND,
     VisualInspectionError,
     extract_report,
     inspection_prompt,
@@ -26,7 +28,15 @@ from visual_inspection_lib.engine import (
     run_worker,
     worker_env,
 )
-from visual_inspection_lib.runtime import create_run, resolve_repository, validate_url
+from visual_inspection_lib.runtime import (
+    MAX_CONCURRENT_INSPECTIONS,
+    ActiveVisualInspection,
+    acquire_run_lock,
+    create_run,
+    open_evidence_directory,
+    resolve_repository,
+    validate_url,
+)
 
 
 def sample_report() -> dict[str, object]:
@@ -58,6 +68,12 @@ def execution_value(markdown: str, label: str) -> str:
 
 class VisualInspectionCase(unittest.TestCase):
     def setUp(self) -> None:
+        self.auto_open = patch.dict(
+            os.environ,
+            {"VISUAL_INSPECTION_AUTO_OPEN": "0"},
+        )
+        self.auto_open.start()
+        self.addCleanup(self.auto_open.stop)
         self.temp = tempfile.TemporaryDirectory(prefix="visual-inspection-test-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -77,14 +93,14 @@ class VisualInspectionCase(unittest.TestCase):
         self.assertIn(str(self.repo), prompt)
         self.assertIn("Inspect repository context only when it helps", prompt)
         self.assertIn("load only `agent-browser skills get core` once", prompt)
-        self.assertIn("do not load `--full` or `dogfood`", prompt)
+        self.assertIn("do not load `core --full` or `dogfood`", prompt)
         self.assertIn("Never use Playwright", prompt)
         self.assertIn("Do not edit", prompt)
         self.assertIn("never pass `--full`", prompt)
         self.assertIn("set -euo pipefail", prompt)
-        self.assertIn("Use 1024x768 when the handoff does not explicitly request", prompt)
+        self.assertIn("Use 1366x768 when the handoff does not explicitly request", prompt)
         self.assertIn("State the actual viewport in the preflight evidence", prompt)
-        self.assertIn("agent-browser set viewport 1024 768", prompt)
+        self.assertIn("agent-browser set viewport 1366 768", prompt)
         self.assertNotIn("agent-browser set viewport 1440 900", prompt)
         self.assertIn("agent-browser snapshot -i -c -d 3", prompt)
         self.assertIn('find role button click --name "Submit"', prompt)
@@ -114,6 +130,66 @@ class VisualInspectionCase(unittest.TestCase):
         )
         self.assertIn("total runtime budget is 420s", prompt)
         self.assertIn("reserve the final 42s", prompt)
+
+    def test_budget_check_uses_supplied_monotonic_deadline(self) -> None:
+        for remaining, expected in [(60, "CONTINUE"), (-60, "FINALIZE")]:
+            with self.subTest(expected=expected):
+                result = subprocess.run(
+                    ["bash", "-c", BUDGET_CHECK_COMMAND],
+                    env={**os.environ, "VISUAL_INSPECTION_FINALIZE_AT":
+                         str(time.monotonic() + remaining)},
+                    text=True, capture_output=True, check=True,
+                )
+                self.assertEqual(result.stdout.strip(), expected)
+        prompt = inspection_prompt(
+            "Inspect settings", self.repo, "https://example.com",
+            "visual-budget", self.root, timeout_seconds=240,
+        )
+        self.assertIn(BUDGET_CHECK_COMMAND, prompt)
+        self.assertIn("after each browser command", prompt)
+        self.assertIn("same shell invocation as each browser command", prompt)
+        self.assertIn("reserve the final 24s", prompt)
+        self.assertIn("keep overall FAIL", prompt)
+        self.assertIn("unexercised or unproven criterion as BLOCKED", prompt)
+
+    def test_worker_receives_deadline_and_can_finalize_before_hard_timeout(self) -> None:
+        fake_bin = self.root / "budget-bin"
+        fake_bin.mkdir()
+        fake_codex = fake_bin / "codex"
+        fake_codex.write_text(
+            """#!/usr/bin/env python3
+import json, os, pathlib, subprocess, sys, time
+args = sys.argv[1:]
+command = sys.stdin.read()
+deadline = float(os.environ['VISUAL_INSPECTION_FINALIZE_AT'])
+before = subprocess.check_output(['bash', '-c', command], text=True).strip()
+time.sleep(max(0, deadline - time.monotonic()) + 0.03)
+after = subprocess.check_output(['bash', '-c', command], text=True).strip()
+output = pathlib.Path(args[args.index('--output-last-message') + 1])
+output.write_text(json.dumps({'before': before, 'after': after, 'deadline': deadline}))
+""",
+            encoding="utf-8",
+        )
+        fake_codex.chmod(fake_codex.stat().st_mode | stat.S_IXUSR)
+        evidence = self.root / "budget-evidence"
+        evidence.mkdir()
+        progress: list[str] = []
+        started = time.monotonic()
+        with patch.dict(os.environ, {
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "VISUAL_INSPECTION_FINALIZE_AT": "0",
+        }):
+            run = run_worker(
+                self.repo, evidence, BUDGET_CHECK_COMMAND, "visual-budget",
+                timeout_seconds=3, heartbeat_seconds=0.1, progress=progress.append,
+            )
+        result = json.loads(run.raw_report)
+        self.assertFalse(run.timed_out)
+        self.assertEqual(result["before"], "CONTINUE")
+        self.assertEqual(result["after"], "FINALIZE")
+        self.assertGreaterEqual(result["deadline"], started + 2.7)
+        self.assertLess(run.duration_seconds, 3)
+        self.assertEqual(sum("janela de fechamento" in x for x in progress), 1)
 
     def test_invalid_context_is_rejected(self) -> None:
         with self.assertRaisesRegex(VisualInspectionError, "empty"):
@@ -159,9 +235,191 @@ class VisualInspectionCase(unittest.TestCase):
             session, _ = create_run(self.root / "local-time")
         self.assertTrue(session.startswith("visual-20260713-235958-"))
 
-    def test_codex_invocation_is_full_access_in_repository_with_sol_medium(self) -> None:
+    def test_evidence_directory_opens_in_windows_explorer_on_wsl(self) -> None:
+        evidence_dir = self.root / "evidence with spaces"
+        evidence_dir.mkdir()
+        completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        converted = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout=r"\\wsl.localhost\Ubuntu\tmp\evidence with spaces" + "\n",
+            stderr="",
+        )
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "VISUAL_INSPECTION_AUTO_OPEN": "1",
+                    "WSL_DISTRO_NAME": "Ubuntu",
+                },
+            ),
+            patch(
+                "visual_inspection_lib.runtime.shutil.which",
+                side_effect=lambda command: {
+                    "wslpath": "/usr/bin/wslpath",
+                    "cmd.exe": "/mnt/c/Windows/System32/cmd.exe",
+                }.get(command),
+            ),
+            patch(
+                "visual_inspection_lib.runtime.subprocess.run",
+                side_effect=[converted, completed],
+            ) as run,
+        ):
+            self.assertTrue(open_evidence_directory(evidence_dir))
+
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            [
+                "/mnt/c/Windows/System32/cmd.exe",
+                "/d",
+                "/c",
+                "start",
+                "",
+                r"\\wsl.localhost\Ubuntu\tmp\evidence with spaces",
+            ],
+        )
+
+    def test_evidence_directory_auto_open_can_be_disabled(self) -> None:
+        evidence_dir = self.root / "evidence"
+        evidence_dir.mkdir()
+        with (
+            patch.dict(os.environ, {"VISUAL_INSPECTION_AUTO_OPEN": "0"}),
+            patch("visual_inspection_lib.runtime.subprocess.run") as run,
+        ):
+            self.assertFalse(open_evidence_directory(evidence_dir))
+        run.assert_not_called()
+
+    def hold_all_run_slots(self, root: Path) -> list:
+        locks = []
+        for slot in range(1, MAX_CONCURRENT_INSPECTIONS + 1):
+            lock = acquire_run_lock(root, f"visual-{slot}", self.repo)
+            self.addCleanup(lock.close)
+            locks.append(lock)
+        return locks
+
+    def test_run_lock_allows_three_active_inspections(self) -> None:
+        self.assertEqual(MAX_CONCURRENT_INSPECTIONS, 3)
+        root = self.root / "exclusive-runs"
+        root.mkdir()
+        locks = self.hold_all_run_slots(root)
+
+        with self.assertRaisesRegex(
+            ActiveVisualInspection,
+            r"3/3 active.*session=visual-1.*session=visual-2.*session=visual-3",
+        ):
+            acquire_run_lock(root, "visual-extra", self.repo)
+
+        locks[0].close()
+        extra = acquire_run_lock(root, "visual-extra", self.repo)
+        extra.close()
+
+    def test_lock_links_cannot_modify_an_existing_file(self) -> None:
+        for link_kind in ("symlink", "hardlink"):
+            with self.subTest(link_kind=link_kind):
+                root = self.root / link_kind
+                root.mkdir(mode=0o700)
+                victim = self.root / f"victim-{link_kind}"
+                victim.write_text("conteúdo preservado", encoding="utf-8")
+                victim.chmod(0o640)
+                if link_kind == "symlink":
+                    (root / ".runner.lock").symlink_to(victim)
+                else:
+                    os.link(victim, root / ".runner.lock")
+                with self.assertRaisesRegex(VisualInspectionError, "unsafe inspection lock"):
+                    acquire_run_lock(root, "visual-rejected", self.repo)
+                self.assertEqual(victim.read_text(encoding="utf-8"), "conteúdo preservado")
+                self.assertEqual(stat.S_IMODE(victim.stat().st_mode), 0o640)
+
+    def test_run_rejects_symlinked_and_foreign_roots(self) -> None:
+        root = self.root / "root-target"
+        root.mkdir(mode=0o755)
+        linked = self.root / "root-link"
+        linked.symlink_to(root, target_is_directory=True)
+        with self.assertRaisesRegex(VisualInspectionError, "unsafe evidence root"):
+            create_run(linked)
+        self.assertEqual(list(root.iterdir()), [])
+        with patch("visual_inspection_lib.runtime.os.getuid", return_value=os.getuid() + 1):
+            with self.assertRaisesRegex(VisualInspectionError, "must belong to the current user"):
+                create_run(root)
+        self.assertEqual(list(root.iterdir()), [])
+        self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o755)
+
+    def test_existing_owned_root_becomes_private_before_run(self) -> None:
+        root = self.root / "previous-version-root"
+        root.mkdir(mode=0o755)
+        _, evidence = create_run(root)
+        self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(evidence.stat().st_mode), 0o700)
+
+    def test_shared_tmp_cannot_be_used_as_the_root(self) -> None:
+        previous = Path("/tmp").stat().st_mode
+        with self.assertRaisesRegex(VisualInspectionError, "under /tmp"):
+            create_run(Path("/tmp"))
+        with self.assertRaisesRegex(VisualInspectionError, "private directory"):
+            acquire_run_lock(Path("/tmp"), "visual-rejected", self.repo)
+        self.assertEqual(Path("/tmp").stat().st_mode, previous)
+
+    def test_run_lock_rescans_when_a_slot_is_released_during_scan(self) -> None:
+        root = self.root / "racing-runs"
+        root.mkdir()
+        locks = self.hold_all_run_slots(root)
+        real_flock = fcntl.flock
+        nonblocking_attempts = 0
+
+        def release_first_during_scan(file_descriptor: int, operation: int) -> None:
+            nonlocal nonblocking_attempts
+            if operation & fcntl.LOCK_NB:
+                nonblocking_attempts += 1
+                if nonblocking_attempts == 2:
+                    locks[0].close()
+            real_flock(file_descriptor, operation)
+
+        with patch(
+            "visual_inspection_lib.runtime.fcntl.flock",
+            side_effect=release_first_during_scan,
+        ):
+            extra = acquire_run_lock(root, "visual-extra", self.repo)
+
+        extra.close()
+        self.assertEqual(nonblocking_attempts, MAX_CONCURRENT_INSPECTIONS + 1)
+
+    def test_concurrent_cli_run_returns_blocked_report_without_worker(self) -> None:
+        root = self.root / "busy-runs"
+        root.mkdir()
+        self.hold_all_run_slots(root)
+
+        result = subprocess.run(
+            [
+                str(Path(__file__).with_name("visual-inspection")),
+                "--repo",
+                str(self.repo),
+                "--url",
+                "https://example.com",
+                "--output-root",
+                str(root),
+            ],
+            input="Current user request: inspect the page",
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=5,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = extract_report(result.stdout)
+        self.assertEqual(report["status"], "blocked")
+        self.assertIn("all 3 execution slots are active", report["summary"])
+        for slot in range(1, MAX_CONCURRENT_INSPECTIONS + 1):
+            self.assertIn(f"visual-{slot}", report["limitations"][0])
+        self.assertIn("blocked by inspection capacity", result.stderr)
+        report_file = Path(execution_value(result.stdout, "Relatório"))
+        self.assertTrue(report_file.is_file())
+
+    def test_codex_invocation_defaults_to_luna_medium_fast_with_full_access(self) -> None:
         command = codex_command(self.repo, Path("report.md"))
-        self.assertEqual(command[command.index("--model") + 1], "gpt-5.6-sol")
+        self.assertEqual(command[command.index("--model") + 1], "gpt-6-luna")
         self.assertIn('model_reasoning_effort="medium"', command)
         self.assertIn("--ephemeral", command)
         self.assertEqual(command[command.index("--cd") + 1], str(self.repo))
@@ -169,16 +427,16 @@ class VisualInspectionCase(unittest.TestCase):
         self.assertNotIn("--skip-git-repo-check", command)
         self.assertNotIn("--ignore-user-config", command)
         self.assertIn("--json", command)
-        self.assertNotIn("fast_mode", command)
-        self.assertNotIn('service_tier="fast"', command)
+        self.assertEqual(command[command.index("--enable") + 1], "fast_mode")
+        self.assertIn('service_tier="fast"', command)
 
-    def test_codex_fast_is_explicit_and_keeps_sol_medium(self) -> None:
+    def test_explicit_fast_keeps_luna_medium(self) -> None:
         command = codex_command(
             self.repo,
             Path("report.md"),
             fast=True,
         )
-        self.assertEqual(command[command.index("--model") + 1], "gpt-5.6-sol")
+        self.assertEqual(command[command.index("--model") + 1], "gpt-6-luna")
         self.assertIn('model_reasoning_effort="medium"', command)
         self.assertEqual(command[command.index("--enable") + 1], "fast_mode")
         self.assertIn('service_tier="fast"', command)
@@ -313,9 +571,11 @@ class VisualInspectionCase(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Status: DRY-RUN", result.stdout)
-        self.assertIn("- Modelo: `gpt-5.6-sol`", result.stdout)
+        self.assertIn("- Modelo: `gpt-6-luna`", result.stdout)
         self.assertIn("- Reasoning: `medium`", result.stdout)
-        self.assertIn("- Tier: `default`", result.stdout)
+        self.assertIn("- Tier: `fast`", result.stdout)
+        self.assertIn("--enable fast_mode", result.stdout)
+        self.assertIn('service_tier="fast"', result.stdout)
         self.assertIn("- Timeout: 420s", result.stdout)
         self.assertIn(f"--cd {self.repo}", result.stdout)
 
@@ -541,8 +801,11 @@ print(json.dumps({'type': 'turn.completed'}), flush=True)
         fake_codex = fake_bin / "codex"
         fake_codex.write_text(
             """#!/usr/bin/env python3
-import json, sys, time
+import json, os, pathlib, sys, time
 sys.stdin.read()
+pathlib.Path(os.environ['AGENT_BROWSER_SCREENSHOT_DIR'], 'progress.md').write_text(
+    '## C1 — PASS\\n\\nPrimeiro critério registrado antes da interrupção.\\n'
+)
 print(json.dumps({'type': 'thread.started', 'thread_id': 'timeout-test'}), flush=True)
 time.sleep(10)
 """,
@@ -588,6 +851,8 @@ time.sleep(10)
         self.assertIn("timed out after 0.3s", output["limitations"][0])
         self.assertIn("heartbeat", result.stderr)
         self.assertIn("timeout reached", result.stderr)
+        self.assertIn("Primeiro critério registrado antes da interrupção", result.stdout)
+        self.assertIn("não prova conclusão de toda a inspeção", result.stdout)
         events = Path(execution_value(result.stdout, "Diretório de evidências")) / "worker-events.jsonl"
         self.assertIn("thread.started", events.read_text(encoding="utf-8"))
 
@@ -770,15 +1035,15 @@ Nenhuma.
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        output = extract_report(result.stdout)
-        self.assertEqual(output["status"], "blocked")
-        self.assertEqual(output["preflight"]["status"], "blocked")
-        self.assertIn("PASS report must cite evidence", output["limitations"][0])
+        self.assertTrue(result.stdout.startswith("Status: BLOCKED"))
+        self.assertIn("PASS report must cite evidence", result.stdout)
+        self.assertIn("Captured but not linked", result.stdout)
+        self.assertIn("resposta de texto", result.stdout)
         evidence_dir = Path(execution_value(result.stdout, "Diretório de evidências"))
         self.assertIn(str(evidence_dir / "captured.png"), result.stdout)
         report_file = Path(execution_value(result.stdout, "Relatório"))
         self.assertTrue(report_file.is_file())
-        self.assertEqual(extract_report(report_file.read_text(encoding="utf-8"))["status"], "blocked")
+        self.assertTrue(report_file.read_text(encoding="utf-8").startswith("Status: BLOCKED"))
 
 
 if __name__ == "__main__":

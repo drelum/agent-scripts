@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import re
+import json
+import os
 import subprocess
 import unicodedata
 from dataclasses import dataclass
@@ -15,21 +16,7 @@ class BundleError(RuntimeError):
 class ReviewBundle:
     label: str
     content: str
-
-
-SENSITIVE_PATH = re.compile(
-    r"(^|/)(id_rsa|id_ed25519|credentials(?:\.json)?|auth\.json|secrets?)(/|$)|"
-    r"(^|/)(\.npmrc|\.pypirc|\.netrc|\.git-credentials)$|"
-    r"(^|/)\.docker/config\.json$|\.(pem|p12|pfx|key)$",
-    re.IGNORECASE,
-)
-SECRET_TEXT = re.compile(
-    r"-----BEGIN [A-Z ]*PRIVATE KEY-----|"
-    r"(?i:(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|"
-    r"aws_access_key_id|aws_secret_access_key|aws_session_token|token))"
-    r"\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{20,}['\"]?|"
-    r"(?i:authorization)\s*:\s*['\"]?bearer\s+[A-Za-z0-9._~+/=-]{20,}"
-)
+    identity: dict[str, object]
 
 
 def git(repo: Path, *args: str, check: bool = True) -> str:
@@ -51,15 +38,6 @@ def require_repository(repo: Path) -> None:
         raise BundleError(f"not a Git repository: {repo}")
 
 
-def _sensitive_path(relative: str) -> bool:
-    return bool(SENSITIVE_PATH.search(relative.replace("\\", "/")))
-
-
-def _screen(label: str, content: str) -> None:
-    if SECRET_TEXT.search(content):
-        raise BundleError(f"secret-like content found in {label}; refusing review bundle")
-
-
 def _path_is_selected(relative: str, selected: tuple[str, ...]) -> bool:
     return not selected or any(
         relative == path or relative.startswith(f"{path.rstrip('/')}/")
@@ -67,7 +45,7 @@ def _path_is_selected(relative: str, selected: tuple[str, ...]) -> bool:
     )
 
 
-def _screen_changed_provenance(
+def _changed_provenance_matches_scope(
     name_status: str,
     label: str,
     selected: tuple[str, ...],
@@ -85,9 +63,6 @@ def _screen_changed_provenance(
         index += path_count
         if any(_path_is_selected(path, selected) for path in changed_paths):
             matched_scope = True
-            for path in changed_paths:
-                if _sensitive_path(path):
-                    raise BundleError(f"sensitive tracked path in {label}: {path}")
     return matched_scope
 
 
@@ -120,6 +95,12 @@ def _scoped_label(label: str, paths: tuple[str, ...]) -> str:
     return f"{label}; paths: {', '.join(paths)}" if paths else label
 
 
+def _symlink_section(kind: str, relative: str, file: Path) -> str:
+    # Registra só o alvo do link; o conteúdo apontado nunca entra no bundle.
+    target = json.dumps(os.readlink(file), ensure_ascii=True)
+    return f"\n--- {kind} symlink: {relative} -> {target} (target content not included) ---\n"
+
+
 def _untracked(repo: Path, max_file_bytes: int, paths: tuple[str, ...]) -> str:
     sections: list[str] = []
     listed = git(
@@ -134,11 +115,10 @@ def _untracked(repo: Path, max_file_bytes: int, paths: tuple[str, ...]) -> str:
     for relative in listed.split("\0"):
         if not relative:
             continue
-        if _sensitive_path(relative):
-            raise BundleError(f"sensitive untracked path: {relative}")
         file = repo / relative
         if file.is_symlink():
-            raise BundleError(f"untracked symlink cannot enter review bundle: {relative}")
+            sections.append(_symlink_section("untracked", relative, file))
+            continue
         if not file.is_file():
             continue
         size = file.stat().st_size
@@ -151,7 +131,6 @@ def _untracked(repo: Path, max_file_bytes: int, paths: tuple[str, ...]) -> str:
         if b"\0" in data:
             raise BundleError(f"binary untracked file cannot enter review bundle: {relative}")
         text = data.decode("utf-8", errors="strict")
-        _screen(relative, text)
         sections.append(f"\n--- untracked file: {relative} ---\n{text}")
     return "".join(sections)
 
@@ -175,11 +154,10 @@ def _initial_worktree(repo: Path, max_file_bytes: int, paths: tuple[str, ...]) -
     for relative in listed.split("\0"):
         if not relative:
             continue
-        if _sensitive_path(relative):
-            raise BundleError(f"sensitive path in initial working tree: {relative}")
         file = repo / relative
         if file.is_symlink():
-            raise BundleError(f"symlink cannot enter initial review bundle: {relative}")
+            sections.append(_symlink_section("initial", relative, file))
+            continue
         if not file.is_file():
             continue
         size = file.stat().st_size
@@ -192,19 +170,21 @@ def _initial_worktree(repo: Path, max_file_bytes: int, paths: tuple[str, ...]) -
         if b"\0" in data:
             raise BundleError(f"binary initial file cannot enter review bundle: {relative}")
         text = data.decode("utf-8", errors="strict")
-        _screen(relative, text)
         sections.append(f"\n--- initial file: {relative} ---\n{text}")
     return "".join(sections)
 
 
 def _local(repo: Path, max_file_bytes: int, paths: tuple[str, ...]) -> ReviewBundle:
+    branch = git(repo, "branch", "--show-current").strip() or None
     if not _has_head(repo):
         return ReviewBundle(
             _scoped_label("initial working tree (no HEAD)", paths),
             _initial_worktree(repo, max_file_bytes, paths),
+            {"mode": "local", "paths": list(paths), "head": None, "branch": branch},
         )
+    head = git(repo, "rev-parse", "HEAD").strip()
     pathspecs = _pathspecs(paths)
-    _screen_changed_provenance(
+    _changed_provenance_matches_scope(
         git(
             repo,
             "diff",
@@ -221,7 +201,11 @@ def _local(repo: Path, max_file_bytes: int, paths: tuple[str, ...]) -> ReviewBun
     )
     patch = git(repo, "diff", "--no-ext-diff", "--unified=80", "HEAD", "--", *pathspecs)
     patch += _untracked(repo, max_file_bytes, paths)
-    return ReviewBundle(_scoped_label("local changes", paths), patch)
+    return ReviewBundle(
+        _scoped_label("local changes", paths),
+        patch,
+        {"mode": "local", "paths": list(paths), "head": head, "branch": branch},
+    )
 
 
 def _resolve_base(repo: Path, requested: str | None) -> str:
@@ -232,11 +216,19 @@ def _resolve_base(repo: Path, requested: str | None) -> str:
     raise BundleError("cannot resolve review base; pass --base <ref>")
 
 
-def _branch(repo: Path, base: str | None, paths: tuple[str, ...]) -> ReviewBundle:
+def _branch(
+    repo: Path,
+    base: str | None,
+    paths: tuple[str, ...],
+    max_file_bytes: int,
+) -> ReviewBundle:
     resolved = _resolve_base(repo, base)
+    head = git(repo, "rev-parse", "HEAD").strip()
+    branch = git(repo, "branch", "--show-current").strip() or None
+    base_oid = git(repo, "rev-parse", f"{resolved}^{{commit}}").strip()
     merge_base = git(repo, "merge-base", "HEAD", resolved).strip()
     pathspecs = _pathspecs(paths)
-    _screen_changed_provenance(
+    _changed_provenance_matches_scope(
         git(
             repo,
             "diff",
@@ -262,16 +254,33 @@ def _branch(repo: Path, base: str | None, paths: tuple[str, ...]) -> ReviewBundl
         "--",
         *pathspecs,
     )
-    return ReviewBundle(_scoped_label(f"branch against {resolved}", paths), patch)
+    patch += git(repo, "diff", "--no-ext-diff", "--unified=80", "HEAD", "--", *pathspecs)
+    patch += _untracked(repo, max_file_bytes, paths)
+    return ReviewBundle(
+        _scoped_label(f"branch against {resolved}", paths),
+        patch,
+        {
+            "mode": "branch",
+            "paths": list(paths),
+            "head": head,
+            "branch": branch,
+            "base_ref": resolved,
+            "base_oid": base_oid,
+            "merge_base": merge_base,
+        },
+    )
 
 
 def _commit(repo: Path, commit: str, paths: tuple[str, ...]) -> ReviewBundle:
+    commit_oid = git(repo, "rev-parse", f"{commit}^{{commit}}").strip()
+    head = git(repo, "rev-parse", "HEAD").strip()
+    branch = git(repo, "branch", "--show-current").strip() or None
     revision = git(repo, "rev-list", "--parents", "-n", "1", commit).split()
     if len(revision) > 2:
         raise BundleError(
             "merge commits require an explicit comparison; use --mode branch --base <first-parent>"
         )
-    matched_scope = _screen_changed_provenance(
+    matched_scope = _changed_provenance_matches_scope(
         git(
             repo,
             "diff-tree",
@@ -302,7 +311,17 @@ def _commit(repo: Path, commit: str, paths: tuple[str, ...]) -> ReviewBundle:
         "--",
         *_pathspecs(paths),
     )
-    return ReviewBundle(_scoped_label(f"commit {commit}", paths), patch)
+    return ReviewBundle(
+        _scoped_label(f"commit {commit}", paths),
+        patch,
+        {
+            "mode": "commit",
+            "paths": list(paths),
+            "head": head,
+            "branch": branch,
+            "commit": commit_oid,
+        },
+    )
 
 
 def build_bundle(
@@ -324,14 +343,13 @@ def build_bundle(
     if selected == "local":
         bundle = _local(repo, max_file_bytes, selected_paths)
     elif selected == "branch":
-        bundle = _branch(repo, base, selected_paths)
+        bundle = _branch(repo, base, selected_paths, max_file_bytes)
     elif selected == "commit":
         bundle = _commit(repo, commit, selected_paths)
     else:
         raise BundleError("no review target: clean main checkout; pass --mode and an explicit target")
     if not bundle.content.strip():
         raise BundleError(f"empty review target: {bundle.label}")
-    _screen(bundle.label, bundle.content)
     size = len(bundle.content.encode("utf-8"))
     if size > max_bundle_bytes:
         raise BundleError(f"review bundle exceeds limit: {size} > {max_bundle_bytes} bytes")

@@ -12,11 +12,15 @@ from pathlib import Path
 
 from visual_inspection_lib.contract import (
     VisualInspectionError,
-    extract_report,
     inspection_prompt,
     render_report,
     validate_context,
-    validate_evidence,
+)
+from visual_inspection_lib.reporting import (
+    ReportAssessment,
+    append_progress,
+    assess_report,
+    render_assessment,
 )
 from visual_inspection_lib.engine import (
     CODEX_MODEL,
@@ -31,8 +35,12 @@ from visual_inspection_lib.engine import (
     run_worker,
 )
 from visual_inspection_lib.runtime import (
+    MAX_CONCURRENT_INSPECTIONS,
+    ActiveVisualInspection,
+    acquire_run_lock,
     create_run,
     discover_preserved_artifacts,
+    open_evidence_directory,
     resolve_repository,
     validate_url,
 )
@@ -40,7 +48,7 @@ from visual_inspection_lib.runtime import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run full-context visual QA with a separate Codex Sol worker."
+        description="Run full-context visual QA with a separate Codex Luna worker."
     )
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--url", required=True)
@@ -49,7 +57,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fast",
         action="store_true",
-        help="Use Codex Fast service tier without changing the fixed model or reasoning effort.",
+        default=True,
+        help="Use Codex Fast service tier (enabled by default; retained for compatibility).",
     )
     parser.add_argument(
         "--timeout-seconds",
@@ -135,6 +144,7 @@ def main() -> int:
     os.umask(0o077)
     args = parse_args()
     context = sys.stdin.read()
+    run_lock = None
     try:
         validate_context(context, args.max_context_kb * 1024)
         repository = resolve_repository(args.repo)
@@ -166,6 +176,38 @@ def main() -> int:
             return 0
 
         session, evidence_dir = create_run(args.output_root)
+        try:
+            run_lock = acquire_run_lock(evidence_dir.parent, session, repository)
+        except ActiveVisualInspection as error:
+            started_at = datetime.now(SAO_PAULO).isoformat(timespec="seconds")
+            report = blocked_report(
+                f"Visual inspection was not started because all {MAX_CONCURRENT_INSPECTIONS} execution slots are active.",
+                "Execution capacity",
+                str(error),
+            )
+            report_file = evidence_dir / "report.md"
+            execution = {
+                "Modelo": f"`{CODEX_MODEL}`",
+                "Reasoning": f"`{CODEX_REASONING_EFFORT}`",
+                "Tier": f"`{'fast' if args.fast else 'default'}`",
+                "Repositório": f"`{repository}`",
+                "URL": url,
+                "Sessão": f"`{session}`",
+                "Diretório de evidências": f"`{evidence_dir}`",
+                "Início": started_at,
+                "Fim": started_at,
+                "Duração": "0.000s",
+                "Relatório": f"`{report_file}`",
+            }
+            rendered = render_report(report, execution=execution)
+            report_file.write_text(rendered, encoding="utf-8")
+            print(rendered, end="")
+            if open_evidence_directory(evidence_dir):
+                progress(
+                    f"opened evidence directory in Windows Explorer; evidence_dir={evidence_dir}"
+                )
+            progress(f"blocked by inspection capacity; evidence_dir={evidence_dir}")
+            return 0
         progress(
             f"run initialized; session={session}; evidence_dir={evidence_dir}; "
             f"timeout={args.timeout_seconds:g}s"
@@ -178,6 +220,7 @@ def main() -> int:
         cleanup_error: str | None = None
         worker_run: WorkerRun | None = None
         preserve_partial_artifacts = False
+        assessment: ReportAssessment | None = None
         try:
             worker_run = run_worker(
                 repository,
@@ -233,8 +276,13 @@ def main() -> int:
                 elif worker_run.raw_report is None:
                     raise VisualInspectionError("Codex worker returned an empty report")
                 else:
-                    report = extract_report(worker_run.raw_report)
-                validate_evidence(report, evidence_dir)
+                    assessment = assess_report(worker_run.raw_report, evidence_dir)
+                    preserve_partial_artifacts = bool(assessment.warnings)
+                    report = assessment.report or blocked_report(
+                        "O worker retornou um laudo de texto para avaliação pelo cliente.",
+                        "Estrutura do laudo",
+                        "; ".join(assessment.warnings),
+                    )
             except VisualInspectionError as error:
                 preserve_partial_artifacts = True
                 report = blocked_report(
@@ -243,6 +291,10 @@ def main() -> int:
                     str(error),
                 )
         if cleanup_error:
+            if assessment is not None:
+                assessment.warnings.append(cleanup_error)
+                if assessment.status == "pass":
+                    assessment.status = "blocked"
             report["limitations"].append(cleanup_error)
             report["criteria"].append(
                 {
@@ -286,18 +338,32 @@ def main() -> int:
             "Duração": f"{duration_seconds:.3f}s",
             "Relatório": f"`{report_file}`",
         }
+        if assessment is not None:
+            execution["Laudo original"] = f"`{evidence_dir / 'worker-report.md'}`"
         if preserved_artifacts:
             execution["Artefatos preservados"] = ", ".join(
                 f"`{path}`" for path in preserved_artifacts
             )
-        rendered = render_report(report, execution=execution)
+        rendered = (
+            render_assessment(assessment, execution)
+            if assessment is not None
+            else render_report(report, execution=execution)
+        )
+        rendered = append_progress(rendered, evidence_dir)
         report_file.write_text(rendered, encoding="utf-8")
         print(rendered, end="")
+        if open_evidence_directory(evidence_dir):
+            progress(
+                f"opened evidence directory in Windows Explorer; evidence_dir={evidence_dir}"
+            )
         progress(
-            f"completed; status={report['status']}; duration={duration_seconds:.3f}s"
+            f"completed; status={assessment.status if assessment else report['status']}; duration={duration_seconds:.3f}s"
         )
+        run_lock.close()
         return 0
     except (VisualInspectionError, UnicodeDecodeError) as error:
+        if run_lock is not None:
+            run_lock.close()
         print(f"visual-inspection: {error}", file=sys.stderr)
         return 2
 
