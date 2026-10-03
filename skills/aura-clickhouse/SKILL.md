@@ -7,6 +7,8 @@ description: Consultar com segurança e somente leitura o ClickHouse do Aura, in
 
 Usar o runner canônico. Não montar conexão, procurar credenciais ou chamar `curl` manualmente.
 
+Para um EAN de empacotamento (caixa vs unidade, cotação/NF distorcida), usar a skill `aura-packaging` — não montar SQL ad hoc.
+
 ```bash
 ch=/home/drelu/Projects/agent-scripts/skills/aura-clickhouse/scripts/aura-clickhouse
 ```

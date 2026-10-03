@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aura Beta Promotion"
+  short_description: "Promove Aura Beta com gates e smoke seguros"
+  default_prompt: "Use $aura-beta-promotion para preparar e validar uma promoção oficial Beta."

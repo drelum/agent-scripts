@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aura Packaging"
+  short_description: "Diagnosticar empacotamento de um EAN no Aura"
+  default_prompt: "Use $aura-packaging para ver cotação, NF, venda e o fator de embalagem deste EAN."

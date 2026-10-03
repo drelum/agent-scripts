@@ -54,7 +54,7 @@ Eventos do PostHog: `$pageview` (`$pathname`, `$referrer`), `$pageleave`, `$dead
 | `cart_checkout_started` | `total_price`, `item_count`, `bucket_count` |
 | `cart_checkout_succeeded` | `total_price`, `item_count`, `bucket_count` |
 | `cart_checkout_failed` | `reason` (ex.: `api_error`), `error_message` (ex.: `HTTP 502`, `EAN cannot be null or empty`, `Manufacturer name cannot be null or empty`) |
-| `cart_cleared`, `cart_condition_removed`, `cart_minimum_helper_opened` | contagens, `gap_amount`, `condition_name` |
+| `cart_cleared`, `cart_condition_removed`, `cart_minimum_helper_opened` | contagens, `gap_amount`, `condition_name`; `cart_minimum_helper_opened.level` = `condition` \| `distribution_center` (28/09/2026: 90% `condition`, quase tudo em `otimiza`; condições removidas são sobretudo campanhas "OL <laboratório>") |
 
 Lacunas: **nenhum evento de carrinho tem EAN, produto, distribuidor ou ID de pedido**; `bucket_count` não é o número
 de pedidos. **Não existe evento de falha ao adicionar item no carrinho.**
@@ -90,6 +90,10 @@ Validação (08–21/09/2026): `cart_checkout_succeeded` = 976 contra 910 carrin
 - `$exception` com `source: 'route_error_boundary'` e `pathname`: erros da tela "Algo deu errado".
 - `order_create_failed`: `failed_count`, `total_count`, `reason`, `error_message`, `http_status`.
 - `cart_checkout_failed`: ganhou `http_status`.
+- Verificação 23/09/2026 15:30: `app_version` em ~90% dos eventos do dia (inclui `$pageview`); `cart_item_add_failed`
+  e `order_create_failed` chegam com todas as propriedades; nenhum `$exception` nem erro de console desde o deploy,
+  logo o caminho `route_error_boundary` ainda não foi exercitado em produção. Contexto enriquecido (`app_surface`,
+  `store_id`...) **não** vem do Aura UI de produção (sem código em `aura-ui`); cobertura segue ~2,5%.
 - Deploy do Aura UI: produção sai da branch `prod` (PR `main → prod`); merge na `main` não publica.
 
 ## Sessões e origem

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Abre o Aura UI Beta local no Chrome do Windows já autenticado como o usuário de teste
+# (o próprio André), na loja do CNPJ informado. O token nunca é impresso.
+#
+# Uso: aura-beta-open-as-me <cnpj> [rota-relativa]
+#   aura-beta-open-as-me 42688433000121                # Mix da loja
+#   aura-beta-open-as-me 42688433000121 /offers
+set -euo pipefail
+
+cnpj="${1:-}"
+route="${2:-/product-assortment}"
+if [[ ! "$cnpj" =~ ^[0-9]{14}$ ]]; then
+  echo "Uso: $(basename "$0") <cnpj com 14 dígitos> [rota-relativa]" >&2
+  exit 2
+fi
+if [[ "$route" != /* ]]; then
+  echo "A rota precisa ser relativa (começar com /)." >&2
+  exit 2
+fi
+
+ui_url="${BETA_UI_URL:-https://ui.beta.aura.localhost}"
+chrome="/mnt/c/Program Files/Google/Chrome/Application/chrome.exe"
+[[ -x "$chrome" ]] || { echo "Chrome não encontrado em $chrome" >&2; exit 1; }
+
+token="$(/home/drelu/Projects/beta/scripts/beta-api-token.sh)"
+# Codifica só a rota; token e CNPJ já são seguros para query string.
+encoded_route="$(printf '%s' "$route" | python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe="/"))')"
+url="${ui_url}/login?token=${token}&cnpj=${cnpj}&redirect_uri=${encoded_route}"
+
+"$chrome" --new-window "$url" >/dev/null 2>&1 &
+disown
+echo "Aberto: ${ui_url}${route} (CNPJ ${cnpj}, autenticado como o usuário de teste)."

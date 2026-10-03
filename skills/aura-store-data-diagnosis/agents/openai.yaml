@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aura — diagnóstico de dados da loja"
+  short_description: "Rastrear divergências entre ERP, bases e Aura"
+  default_prompt: "Use $aura-store-data-diagnosis para investigar esta divergência de dados da loja, somente em leitura, e localizar a primeira etapa divergente."

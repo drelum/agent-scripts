@@ -1,0 +1,288 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly CH="${AURA_CLICKHOUSE:-/home/drelu/Projects/agent-scripts/skills/aura-clickhouse/scripts/aura-clickhouse}"
+readonly DEFAULT_CNPJ="05101867000157"
+readonly DEFAULT_DAYS=365
+
+die() {
+  printf 'aura-packaging: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+Uso:
+  aura-packaging <ean> [cnpj]
+  aura-packaging --days <n> <ean> [cnpj]
+
+Somente leitura. CNPJ padrão: 05101867000157. Janela padrão: 365 dias
+(America/Sao_Paulo) para venda e NF. Cotação = snapshot vigente.
+EOF
+}
+
+digits_only() {
+  printf '%s' "$1" | tr -cd '0-9'
+}
+
+is_number() {
+  [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
+# Custo só é denominador se estiver entre 15% e 80% do preço de venda.
+cost_usable() {
+  awk -v c="$1" -v p="$2" 'BEGIN {
+    if (c + 0 <= 0 || p + 0 <= 0) exit 1
+    if (c >= 0.15 * p && c <= 0.8 * p) exit 0
+    exit 1
+  }'
+}
+
+days="$DEFAULT_DAYS"
+ean=""
+cnpj=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --days)
+      [[ $# -ge 2 ]] || die "informe --days <n>"
+      days="$2"
+      shift 2
+      ;;
+    --*)
+      die "opção desconhecida: $1"
+      ;;
+    *)
+      if [[ -z "$ean" ]]; then
+        ean="$1"
+      elif [[ -z "$cnpj" ]]; then
+        cnpj="$1"
+      else
+        die "argumentos demais"
+      fi
+      shift
+      ;;
+  esac
+done
+
+[[ -n "$ean" ]] || { usage >&2; exit 1; }
+[[ -x "$CH" ]] || die "runner ClickHouse ausente: $CH"
+[[ "$days" =~ ^[1-9][0-9]*$ && "$days" -le 730 ]] || die "--days deve ser 1–730"
+
+ean="$(digits_only "$ean")"
+cnpj="$(digits_only "${cnpj:-$DEFAULT_CNPJ}")"
+[[ "$ean" =~ ^[0-9]{8,14}$ ]] || die "EAN inválido"
+[[ "$cnpj" =~ ^[0-9]{14}$ ]] || die "CNPJ inválido"
+
+run() {
+  "$CH" query
+}
+
+section() {
+  printf '\n=== %s ===\n' "$1"
+}
+
+# n = fraction do catálogo/venda se a razão cair ±25%; senão inteiro próximo (±0,15).
+n_expr() {
+  local price="$1"
+  cat <<EOF
+if(
+  ${custo_sql} > 0 AND ${fracao_sql} >= 2
+    AND abs((${price}) / ${custo_sql} - ${fracao_sql}) / ${fracao_sql} <= 0.25,
+  toUInt16(${fracao_sql}),
+  if(
+    ${custo_sql} > 0
+      AND (${price}) / ${custo_sql} >= 1.7
+      AND abs((${price}) / ${custo_sql} - round((${price}) / ${custo_sql})) <= 0.15
+      AND round((${price}) / ${custo_sql}) >= 2,
+    toUInt16(round((${price}) / ${custo_sql})),
+    NULL
+  )
+)
+EOF
+}
+
+section "META"
+printf 'ean\t%s\ncnpj\tdays\ttz\n%s\t%s\tAmerica/Sao_Paulo\n' "$ean" "$cnpj" "$days"
+
+loja="$(run <<SQL
+SELECT
+  store_id,
+  economic_group_id,
+  trade_name,
+  chain_name,
+  city,
+  state,
+  erp_name,
+  status
+FROM analytics.store
+WHERE replaceRegexpAll(store_cnpj, '[^0-9]', '') = '${cnpj}'
+LIMIT 2
+FORMAT TSV
+SQL
+)"
+[[ -n "$loja" ]] || die "loja não encontrada para CNPJ ${cnpj}"
+store_id="$(printf '%s\n' "$loja" | head -n 1 | cut -f1)"
+[[ "$store_id" =~ ^[0-9]+$ ]] || die "store_id inválido"
+
+section "LOJA"
+printf 'store_id\tgrupo\ttrade_name\tchain_name\tcity\tstate\terp_name\tstatus\n'
+printf '%s\n' "$loja"
+
+section "CATALOGO"
+catalog="$(run <<SQL
+SELECT
+  ean,
+  ean_group_main,
+  product_name,
+  product_full_name,
+  product_presentation,
+  fraction,
+  fraction_unit,
+  box_count,
+  manufacturer,
+  arrayStringConcat(arrayFilter(x -> x IS NOT NULL AND x != '', ean_secondaries), ',')
+FROM analytics.catalog
+WHERE ean = '${ean}'
+   OR ean_group_main = '${ean}'
+   OR has(ean_secondaries, '${ean}')
+LIMIT 8
+FORMAT TSV
+SQL
+)"
+printf 'ean\tean_group_main\tproduct_name\tproduct_full_name\tproduct_presentation\tfraction\tfraction_unit\tbox_count\tmanufacturer\tsecondaries\n'
+if [[ -n "$catalog" ]]; then
+  printf '%s\n' "$catalog"
+fi
+catalog_fraction="$(printf '%s\n' "$catalog" | awk -F'\t' -v e="$ean" '
+  $1 == e && $6 ~ /^[1-9][0-9]*$/ { print $6; hit = 1; exit }
+  $6 ~ /^[1-9][0-9]*$/ {
+    if (fallback == "") fallback = $6
+    else if ($6 != fallback) conflict = 1
+  }
+  END { if (!hit && fallback != "" && !conflict) print fallback }
+')"
+
+section "MIX"
+run <<SQL
+SELECT
+  ean,
+  stock_balance AS estoque,
+  product_fraction AS fracao,
+  round(toFloat64(sell_price_store), 4) AS preco_loja,
+  round(product_cost, 4) AS custo,
+  product_cost_source AS custo_fonte,
+  round(product_cost_store, 4) AS custo_loja,
+  round(product_cost_store_invoice, 4) AS custo_nf,
+  round(product_cost_quote, 4) AS custo_cotacao,
+  product_count_30_days AS un_30d,
+  product_count_90_days AS un_90d
+FROM analytics.product_assortment
+WHERE store_id = ${store_id}
+  AND ean = '${ean}'
+FORMAT TSVWithNames
+SQL
+
+section "VENDA"
+venda="$(run <<SQL
+SELECT
+  count(),
+  sum(product_count),
+  round(avg(unit_price), 4),
+  round(avg(product_cost_price_avg), 4),
+  max(fraction),
+  min(sale_date),
+  max(sale_date)
+FROM analytics.sale
+WHERE store_id = ${store_id}
+  AND ean = '${ean}'
+  AND sale_date >= toDateTime(
+        toDate(now('America/Sao_Paulo')) - ${days},
+        'America/Sao_Paulo')
+  AND sale_date < toDateTime(
+        toDate(now('America/Sao_Paulo')) + 1,
+        'America/Sao_Paulo')
+FORMAT TSV
+SQL
+)"
+printf 'linhas\tunidades\tpreco_venda\tcusto_erp\tfracao\tvenda_min\tvenda_max\n'
+printf '%s\n' "$venda"
+
+preco_venda="$(printf '%s\n' "$venda" | cut -f3)"
+custo_erp="$(printf '%s\n' "$venda" | cut -f4)"
+venda_fraction="$(printf '%s\n' "$venda" | cut -f5)"
+custo_sql="0"
+custo_status="rejeitado"
+if is_number "$custo_erp" && is_number "$preco_venda" && cost_usable "$custo_erp" "$preco_venda"; then
+  custo_sql="$custo_erp"
+  custo_status="confiavel"
+fi
+fracao_sql="0"
+if [[ "$venda_fraction" =~ ^[1-9][0-9]*$ ]]; then
+  fracao_sql="$venda_fraction"
+elif [[ "$catalog_fraction" =~ ^[1-9][0-9]*$ ]]; then
+  fracao_sql="$catalog_fraction"
+fi
+printf 'custo_denominador\t%s\tfracao_usada\t%s\n' "$custo_status" "$fracao_sql"
+
+n_nf="$(n_expr 'toFloat64(unit_price)')"
+n_quote="$(n_expr 'net_price')"
+
+section "NF"
+run <<SQL
+SELECT
+  supplier_name AS fornecedor,
+  product_unit_type AS tipo,
+  round(toFloat64(unit_price), 4) AS preco,
+  count() AS ocorr,
+  sum(product_count) AS qtd,
+  max(invoice_date) AS ultima,
+  if(${custo_sql} > 0, round(toFloat64(unit_price) / ${custo_sql}, 2), NULL) AS razao,
+  ${n_nf} AS n_sugerido
+FROM analytics.invoice
+WHERE store_id = ${store_id}
+  AND ean = '${ean}'
+  AND invoice_date >= toDate(now('America/Sao_Paulo')) - ${days}
+  AND invoice_date <= toDate(now('America/Sao_Paulo'))
+  AND unit_price > 0
+GROUP BY supplier_name, product_unit_type, unit_price
+ORDER BY ultima DESC, ocorr DESC
+LIMIT 30
+FORMAT TSVWithNames
+SQL
+
+section "COTACAO"
+run <<SQL
+SELECT
+  ifNull(distributor_name, distribution_center_name) AS dist,
+  condition_name AS condicao,
+  quote_type,
+  round(gross_price, 4) AS bruto,
+  round(net_price, 4) AS liquido,
+  round(discount_rate, 4) AS desc_pct,
+  stock_balance AS estoque,
+  distribution_center_product_code AS codigo,
+  if(${custo_sql} > 0, round(net_price / ${custo_sql}, 2), NULL) AS razao_liq,
+  ${n_quote} AS n_sugerido,
+  max(reference_date) AS ref
+FROM analytics.quote
+WHERE store_id = ${store_id}
+  AND ean = '${ean}'
+GROUP BY
+  distributor_name,
+  distribution_center_name,
+  condition_name,
+  quote_type,
+  gross_price,
+  net_price,
+  discount_rate,
+  stock_balance,
+  distribution_center_product_code
+ORDER BY liquido ASC, bruto ASC, dist ASC
+LIMIT 40
+FORMAT TSVWithNames
+SQL
