@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Chrome Linux com Wayland por padrão; preserva os argumentos recebidos.
+exec /usr/bin/google-chrome-stable --ozone-platform=wayland "$@"

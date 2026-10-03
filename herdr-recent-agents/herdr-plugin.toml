@@ -1,0 +1,23 @@
+id = "andre.recent-agents"
+name = "Recent Agents"
+version = "0.2.0"
+min_herdr_version = "0.9.0"
+description = "Keep active agents above inactive ones, then sort by recent state change"
+platforms = ["linux"]
+
+[[startup]]
+command = ["python3", "apply.py"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["python3", "apply.py"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["python3", "apply.py"]
+
+[[actions]]
+id = "apply"
+title = "Ordenar agentes por atividade recente"
+contexts = ["workspace"]
+command = ["python3", "apply.py"]

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ "$#" -eq 0 ]]; then
+  echo "Uso: trash <caminho> [...]" >&2
+  exit 2
+fi
+
+case "$1" in
+  -h|--help)
+    echo "Uso: trash <caminho> [...]"
+    exit 0
+    ;;
+esac
+
+exec /usr/bin/gio trash -- "$@"

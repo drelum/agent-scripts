@@ -1,15 +1,18 @@
 # Paths do Windows no Herdr
 
-Abre no app padrão do Windows (via `explorer.exe`; pastas no Explorer) os hyperlinks `file://` clicados nos panes do Herdr.
+Abre no app padrão do Windows (via `explorer.exe`; pastas no Explorer) paths mostrados nos panes do Herdr:
 
-O Herdr só entrega ao plugin URLs: hyperlink OSC 8 ou `file://...` em texto puro. Path Windows em texto puro (`C:\...`, `\\wsl.localhost\...`) não é detectado. Por isso `AGENTS.md` manda os agentes mostrarem paths como link markdown — texto = path Windows (`wslpath -w`), destino = `file://` —; funciona tanto renderizado como OSC 8 quanto com o URI visível.
+- **Clique** em link `file://` (hyperlink OSC 8 ou URI em texto puro). O Herdr só entrega URLs ao plugin; path Windows ou relativo em texto puro não vira link.
+- **Seleção** → botão direito → **Abrir no Windows**. Aceita path Windows (`C:\...`, `\\wsl.localhost\...`), Linux absoluto, `~/...` ou relativo ao cwd do pane; remove molduras equilibradas de crases, aspas e parênteses, preservando pontuação e espaços do nome. O nome literal existente tem precedência. Path Linux inexistente não abre (ver log).
 
-URIs aceitos: `file://wsl.localhost/Ubuntu/...`, `file:///C:/...`, `file:///home/...` (convertido com `wslpath -w`).
+Caso do Codex: ele reescreve links `file://` como `texto (path/relativo)`, então o clique não funciona; selecionar o path relativo resolve.
+
+`AGENTS.md` manda os agentes mostrarem o path Windows (`wslpath -w`) em crases e o URI `file://` em linha própria.
 
 Herdr 0.9.0 ou superior, WSL, Python 3. Sem dependências externas.
 
 ```bash
 herdr plugin link /home/drelu/Projects/agent-scripts/herdr-windows-paths
-herdr plugin log list   # conferir execuções do clique
+herdr plugin log list   # conferir execuções
 herdr plugin unlink andre.windows-paths
 ```

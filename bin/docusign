@@ -1,0 +1,406 @@
+#!/usr/bin/env python3
+"""Small local DocuSign helper for OAuth, envelopes, documents and downloads."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import contextlib
+import datetime as dt
+import http.server
+import json
+import os
+import secrets
+import socketserver
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path.home() / "Projects" / "agent-scripts"
+DEFAULT_ENV_FILE = ROOT / "secrets" / "docusign.env"
+STATE_DIR = ROOT / ".state" / "docusign"
+TOKEN_FILE = STATE_DIR / "token.json"
+USERINFO_FILE = STATE_DIR / "userinfo.json"
+
+ENV_AUTH = {
+    "demo": "https://account-d.docusign.com",
+    "production": "https://account.docusign.com",
+    "prod": "https://account.docusign.com",
+}
+
+
+class DocusignError(RuntimeError):
+    pass
+
+
+def load_env(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def config(args: argparse.Namespace) -> dict[str, str]:
+    env_file = Path(args.env_file).expanduser()
+    file_values = load_env(env_file)
+    values = {**file_values, **os.environ}
+    client_id = values.get("DOCUSIGN_CLIENT_ID")
+    client_secret = values.get("DOCUSIGN_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        raise DocusignError(
+            f"Configure DOCUSIGN_CLIENT_ID and DOCUSIGN_CLIENT_SECRET in {env_file}"
+        )
+    env_name = values.get("DOCUSIGN_ENV", "demo").lower()
+    auth_base = values.get("DOCUSIGN_AUTH_BASE") or ENV_AUTH.get(env_name)
+    if not auth_base:
+        raise DocusignError("DOCUSIGN_ENV must be demo, production, or set DOCUSIGN_AUTH_BASE")
+    return {
+        "env_file": str(env_file),
+        "env": env_name,
+        "auth_base": auth_base.rstrip("/"),
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": values.get("DOCUSIGN_REDIRECT_URI", "http://localhost:8765/callback"),
+        "scope": values.get("DOCUSIGN_SCOPE", "signature extended"),
+        "account_id": values.get("DOCUSIGN_ACCOUNT_ID", ""),
+        "base_uri": values.get("DOCUSIGN_BASE_URI", ""),
+    }
+
+
+def request_json(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    data: bytes | None = None,
+) -> Any:
+    req = urllib.request.Request(url, method=method, headers=headers or {}, data=data)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as res:
+            body = res.read()
+            if not body:
+                return None
+            return json.loads(body.decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        body = err.read().decode("utf-8", errors="replace")
+        raise DocusignError(f"HTTP {err.code} {url}\n{body}") from err
+
+
+def request_bytes(
+    url: str, *, headers: dict[str, str]) -> tuple[bytes, dict[str, str]]:
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=120) as res:
+            return res.read(), dict(res.headers.items())
+    except urllib.error.HTTPError as err:
+        body = err.read().decode("utf-8", errors="replace")
+        raise DocusignError(f"HTTP {err.code} {url}\n{body}") from err
+
+
+def token_headers(cfg: dict[str, str]) -> dict[str, str]:
+    raw = f"{cfg['client_id']}:{cfg['client_secret']}".encode("utf-8")
+    return {
+        "Authorization": "Basic " + base64.b64encode(raw).decode("ascii"),
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+
+
+def save_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
+    path.chmod(0o600)
+
+
+def load_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def exchange_code(cfg: dict[str, str], code: str) -> dict[str, Any]:
+    data = urllib.parse.urlencode(
+        {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": cfg["redirect_uri"],
+        }
+    ).encode("utf-8")
+    token = request_json(
+        cfg["auth_base"] + "/oauth/token",
+        method="POST",
+        headers=token_headers(cfg),
+        data=data,
+    )
+    token["expires_at"] = int(dt.datetime.now(dt.UTC).timestamp()) + int(token.get("expires_in", 0))
+    save_json(TOKEN_FILE, token)
+    return token
+
+
+def refresh_token(cfg: dict[str, str], token: dict[str, Any]) -> dict[str, Any]:
+    refresh = token.get("refresh_token")
+    if not refresh:
+        raise DocusignError("Token sem refresh_token; rode `docusign auth` de novo")
+    data = urllib.parse.urlencode(
+        {"grant_type": "refresh_token", "refresh_token": refresh}
+    ).encode("utf-8")
+    new_token = request_json(
+        cfg["auth_base"] + "/oauth/token",
+        method="POST",
+        headers=token_headers(cfg),
+        data=data,
+    )
+    new_token["expires_at"] = int(dt.datetime.now(dt.UTC).timestamp()) + int(
+        new_token.get("expires_in", 0)
+    )
+    if "refresh_token" not in new_token:
+        new_token["refresh_token"] = refresh
+    save_json(TOKEN_FILE, new_token)
+    return new_token
+
+
+def access_token(cfg: dict[str, str]) -> str:
+    if not TOKEN_FILE.exists():
+        raise DocusignError("Sem token local; rode `docusign auth` primeiro")
+    token = load_json(TOKEN_FILE)
+    now = int(dt.datetime.now(dt.UTC).timestamp())
+    if int(token.get("expires_at", 0)) - now < 120:
+        token = refresh_token(cfg, token)
+    return token["access_token"]
+
+
+def api_context(cfg: dict[str, str]) -> tuple[str, str]:
+    account_id = cfg.get("account_id")
+    base_uri = cfg.get("base_uri")
+    if account_id and base_uri:
+        return account_id, base_uri.rstrip("/") + "/restapi"
+    if not USERINFO_FILE.exists():
+        raise DocusignError("Sem userinfo local; rode `docusign whoami` primeiro")
+    userinfo = load_json(USERINFO_FILE)
+    accounts = userinfo.get("accounts") or []
+    if not accounts:
+        raise DocusignError("Nenhuma conta DocuSign encontrada no userinfo")
+    default = next((a for a in accounts if a.get("is_default")), accounts[0])
+    return default["account_id"], default["base_uri"].rstrip("/") + "/restapi"
+
+
+class CallbackHandler(http.server.BaseHTTPRequestHandler):
+    server: Any
+
+    def do_GET(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        params = urllib.parse.parse_qs(parsed.query)
+        self.server.callback = {key: values[0] for key, values in params.items()}
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"DocuSign autorizado. Pode voltar ao terminal.\n")
+
+    def log_message(self, *_args: Any) -> None:
+        return
+
+
+def open_browser(url: str) -> None:
+    with contextlib.suppress(Exception):
+        subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def cmd_auth(args: argparse.Namespace) -> None:
+    cfg = config(args)
+    redirect = urllib.parse.urlparse(cfg["redirect_uri"])
+    port = redirect.port or 8765
+    expected_state = secrets.token_urlsafe(24)
+    params = urllib.parse.urlencode(
+        {
+            "response_type": "code",
+            "scope": cfg["scope"],
+            "client_id": cfg["client_id"],
+            "redirect_uri": cfg["redirect_uri"],
+            "state": expected_state,
+        }
+    )
+    url = cfg["auth_base"] + "/oauth/auth?" + params
+    print("Abra/autorize esta URL:")
+    print(url)
+    if not args.no_browser:
+        open_browser(url)
+    with socketserver.TCPServer((args.listen_host, port), CallbackHandler) as server:
+        server.callback = None
+        while server.callback is None:
+            server.handle_request()
+        callback = server.callback
+    if callback.get("state") != expected_state:
+        raise DocusignError("OAuth state inválido")
+    if "error" in callback:
+        raise DocusignError(f"OAuth erro: {callback.get('error')} {callback.get('error_description', '')}")
+    token = exchange_code(cfg, callback["code"])
+    print(f"Token salvo em {TOKEN_FILE}")
+    print(f"Expira em {token.get('expires_in')}s")
+
+
+def cmd_whoami(args: argparse.Namespace) -> None:
+    cfg = config(args)
+    token = access_token(cfg)
+    userinfo = request_json(
+        cfg["auth_base"] + "/oauth/userinfo",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    save_json(USERINFO_FILE, userinfo)
+    print(json.dumps(userinfo, indent=2, ensure_ascii=False))
+
+
+def cmd_accounts(args: argparse.Namespace) -> None:
+    cfg = config(args)
+    if not USERINFO_FILE.exists():
+        cmd_whoami(args)
+    userinfo = load_json(USERINFO_FILE)
+    rows = userinfo.get("accounts") or []
+    for account in rows:
+        marker = "*" if account.get("is_default") else " "
+        print(f"{marker} {account.get('account_id')} | {account.get('account_name')} | {account.get('base_uri')}")
+
+
+def api_get(cfg: dict[str, str], path: str, params: dict[str, str] | None = None) -> Any:
+    account_id, api_base = api_context(cfg)
+    path = path.format(account_id=account_id)
+    query = ""
+    if params:
+        query = "?" + urllib.parse.urlencode(params)
+    return request_json(
+        api_base + path + query,
+        headers={"Authorization": f"Bearer {access_token(cfg)}"},
+    )
+
+
+def cmd_envelopes(args: argparse.Namespace) -> None:
+    cfg = config(args)
+    from_date = args.from_date
+    if not from_date:
+        from_date = (dt.datetime.now(dt.UTC) - dt.timedelta(days=args.days)).strftime("%Y-%m-%dT00:00:00Z")
+    params = {
+        "from_date": from_date,
+        "status": args.status,
+        "count": str(args.count),
+    }
+    data = api_get(cfg, "/v2.1/accounts/{account_id}/envelopes", params)
+    envelopes = data.get("envelopes") or []
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+    for env in envelopes:
+        print(
+            " | ".join(
+                [
+                    env.get("envelopeId", ""),
+                    env.get("status", ""),
+                    env.get("sentDateTime", env.get("createdDateTime", "")),
+                    env.get("emailSubject", ""),
+                ]
+            )
+        )
+
+
+def cmd_documents(args: argparse.Namespace) -> None:
+    cfg = config(args)
+    data = api_get(
+        cfg,
+        f"/v2.1/accounts/{{account_id}}/envelopes/{args.envelope_id}/documents",
+    )
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+    for doc in data.get("envelopeDocuments") or []:
+        print(f"{doc.get('documentId')} | {doc.get('type')} | {doc.get('name')}")
+
+
+def safe_filename(value: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in value).strip("_")
+
+
+def cmd_download(args: argparse.Namespace) -> None:
+    cfg = config(args)
+    account_id, api_base = api_context(cfg)
+    document_id = args.document
+    url = f"{api_base}/v2.1/accounts/{account_id}/envelopes/{args.envelope_id}/documents/{document_id}"
+    body, _headers = request_bytes(url, headers={"Authorization": f"Bearer {access_token(cfg)}"})
+    out = Path(args.out).expanduser()
+    if out.exists() and out.is_dir() or str(args.out).endswith(os.sep):
+        out.mkdir(parents=True, exist_ok=True)
+        out = out / f"{safe_filename(args.envelope_id)}-{safe_filename(document_id)}.pdf"
+    else:
+        out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(body)
+    print(f"Baixado: {out}")
+
+
+def cmd_mcp(args: argparse.Namespace) -> None:
+    cfg = config(args)
+    url = "https://mcp-d.docusign.com/mcp" if cfg["env"] == "demo" else "https://mcp.docusign.com/mcp"
+    print("MCP DocuSign remoto:")
+    print(f"URL: {url}")
+    print(f"Client ID: {cfg['client_id']}")
+    print("OAuth: Confidential Authorization Code Grant")
+    print("Redirect URI comum em clientes: callback do próprio cliente MCP/Claude/Cursor")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="docusign")
+    parser.add_argument("--env-file", default=str(DEFAULT_ENV_FILE))
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    auth = sub.add_parser("auth", help="Faz login OAuth e salva token local")
+    auth.add_argument("--no-browser", action="store_true")
+    auth.add_argument("--listen-host", default="0.0.0.0")
+    auth.set_defaults(func=cmd_auth)
+
+    whoami = sub.add_parser("whoami", help="Mostra usuário/contas via OAuth userinfo")
+    whoami.set_defaults(func=cmd_whoami)
+
+    accounts = sub.add_parser("accounts", help="Lista contas disponíveis")
+    accounts.set_defaults(func=cmd_accounts)
+
+    envelopes = sub.add_parser("envelopes", help="Lista envelopes recentes")
+    envelopes.add_argument("--days", type=int, default=90)
+    envelopes.add_argument("--from-date")
+    envelopes.add_argument("--status", default="completed,sent,delivered")
+    envelopes.add_argument("--count", type=int, default=50)
+    envelopes.add_argument("--json", action="store_true")
+    envelopes.set_defaults(func=cmd_envelopes)
+
+    docs = sub.add_parser("documents", help="Lista documentos de um envelope")
+    docs.add_argument("envelope_id")
+    docs.add_argument("--json", action="store_true")
+    docs.set_defaults(func=cmd_documents)
+
+    download = sub.add_parser("download", help="Baixa um documento PDF")
+    download.add_argument("envelope_id")
+    download.add_argument("--document", default="combined")
+    download.add_argument("--out", default=str(Path.cwd()))
+    download.set_defaults(func=cmd_download)
+
+    mcp = sub.add_parser("mcp", help="Mostra dados para configurar MCP remoto")
+    mcp.set_defaults(func=cmd_mcp)
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    try:
+        args.func(args)
+        return 0
+    except DocusignError as err:
+        print(f"Erro: {err}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
