@@ -1,0 +1,715 @@
+#!/usr/bin/env python3
+"""Gravador v2 das novidades: um clipe por passo de "Como usar", montado com zoom no foco.
+
+Uso:
+  aura-novidades-gravar <slug>                  captura + montagem
+  aura-novidades-gravar <slug> --capturar       só captura (tomada validada em /tmp)
+  aura-novidades-gravar <slug> --compor <dir>   remonta uma tomada validada, sem abrir o navegador
+
+Entradas: novidades/entradas/<slug>.md (a legenda de cada passo vem de "Como usar") e
+novidades/entradas/roteiros/<slug>.yaml (onde clicar e o que esperar; ver o roteiro piloto).
+Saídas: entradas/video/<slug>.mp4, entradas/img/<slug>.png (quadro final, pôster e prévia) e
+entradas/img/<slug>-passo-N.png (recorte do foco de cada passo, exibido em "Como usar").
+
+Garantias, todas verificadas antes de aceitar a tomada:
+  - máscara instalada por init-script em todo documento, com restos [] no início, a cada passo e no fim;
+  - guarda.js recusa qualquer escrita na API; leituras por POST só se declaradas no roteiro;
+  - nenhum token, CNPJ ou dado de loja é impresso; só método e caminho aparecem em diagnósticos.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+import fcntl
+import hashlib
+
+import yaml
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+SKILL = Path(__file__).resolve().parent
+GRAVADOR = SKILL / "gravador"
+RAIZ = Path(os.environ.get("AURA_BETA_ROOT", Path.home() / "Projects/beta"))
+NOV = RAIZ / "novidades"
+UI = os.environ.get("NOV_UI", "https://ui.beta.aura.localhost")
+API = os.environ.get("NOV_API", "https://api.beta.aura.localhost")
+FONTE = Path(os.environ.get("NOV_FONTE", Path.home() / ".cache/aura-novidades/DMSans.ttf"))
+
+# Composição: quadro final 1440×900; o Aura ocupa 1232×770 (16:10) e a legenda fica abaixo.
+OUT_W, OUT_H = 1440, 900
+DEMO_W, DEMO_H, DEMO_X, DEMO_Y = 1232, 770, 104, 16
+# deviceScaleFactor da captura: acima de 1 o zoom continua nítido; 2 pode fazer o codificador
+# do agent-browser ficar para trás ("encoder fell behind") em máquina carregada.
+ESCALA = float(os.environ.get("NOV_ESCALA", "1.5"))
+TRANSICAO = 0.3
+QUADRO = 1 / 30
+RAMPA_ZOOM = 0.7
+ZOOM_PADRAO = 2.0
+LIMITE_S = float(os.environ.get("NOV_LIMITE_S", "45"))
+# Quadro inicial congelado em cada passo: o leitor lê a legenda nova antes do primeiro gesto.
+# Cresce com o tamanho da legenda (≈90 caracteres por segundo de leitura inicial), de 0,8 s a 1,6 s.
+PAUSA_INICIO = 0.8
+PAUSA_MAXIMA = 1.6
+
+
+def pausa_inicio(texto: str) -> float:
+    visivel = re.sub(r"\*\*", "", texto)
+    return round(min(PAUSA_MAXIMA, max(PAUSA_INICIO, 0.4 + len(visivel) / 90)), 2)
+ROXO, ROXO_INK, TINTA = (124, 58, 237), (91, 33, 182), (31, 41, 55)
+
+
+class Reprovado(Exception):
+    """Falha que invalida a tomada; a mensagem nunca contém dados sensíveis."""
+
+
+# ------------------------------------------------------------------ entrada e roteiro
+def ler_entrada(slug: str) -> dict:
+    texto = (NOV / "entradas" / f"{slug}.md").read_text(encoding="utf-8")
+    m = re.match(r"^---\n(.*?)\n---\n(.*)$", texto, re.S)
+    if not m:
+        raise Reprovado("entrada sem cabeçalho")
+    meta = {}
+    for linha in m.group(1).splitlines():
+        if ":" in linha:
+            k, v = linha.split(":", 1)
+            meta[k.strip()] = re.sub(r"\s+#\s.*$", "", v).strip()
+    secao = re.search(r"^## Como usar\n(.*?)(?=^## |\Z)", m.group(2), re.S | re.M)
+    passos = re.findall(r"^\d+\.\s+(.+)$", secao.group(1) if secao else "", re.M)
+    if not passos:
+        raise Reprovado("entrada sem passos em \"Como usar\"")
+    meta["passos"] = passos
+    return meta
+
+
+def ler_roteiro(slug: str, n_passos: int) -> dict:
+    roteiro = yaml.safe_load((NOV / "entradas" / "roteiros" / f"{slug}.yaml").read_text(encoding="utf-8"))
+    for chave in ("loja", "origem", "passos"):
+        if not roteiro.get(chave):
+            raise Reprovado(f"roteiro sem \"{chave}\"")
+    if len(roteiro["passos"]) != n_passos:
+        raise Reprovado(f"roteiro com {len(roteiro['passos'])} passos; \"Como usar\" tem {n_passos}")
+    return roteiro
+
+
+def mascara_extra(slug: str) -> Path | None:
+    """Arquivo JSON opcional do roteiro ({pares, notas}); relativo à pasta de roteiros."""
+    roteiro = yaml.safe_load((NOV / "entradas/roteiros" / f"{slug}.yaml").read_text(encoding="utf-8")) or {}
+    extra = roteiro.get("mascara_extra")
+    return (NOV / "entradas/roteiros" / extra).resolve() if extra else None
+
+
+def assinatura(slug: str) -> str:
+    """Hash do que define a tomada: entrada, roteiro, máscara e init-scripts da gravação."""
+    h = hashlib.sha256()
+    extra = mascara_extra(slug)
+    for arquivo in (NOV / "entradas" / f"{slug}.md", NOV / "entradas/roteiros" / f"{slug}.yaml",
+                    SKILL / "mascara.js", GRAVADOR / "guarda.js", GRAVADOR / "palco.js",
+                    *([extra] if extra else [])):
+        h.update(arquivo.name.encode())
+        h.update(arquivo.read_bytes())
+    return h.hexdigest()
+
+
+# ------------------------------------------------------------------ agent-browser
+class Navegador:
+    def __init__(self, sessao: str):
+        self.sessao = sessao
+
+    def __call__(self, *args: str, json_saida: bool = False, globais: tuple = ()) -> dict | str:
+        cmd = ["agent-browser", "--session", self.sessao, *globais]
+        if json_saida:
+            cmd.append("--json")
+        cmd += list(args)
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            # Só o nome do comando: argumentos podem conter bootstrap, dados ou JavaScript. A mensagem
+            # de erro da CLI entra apenas em comandos sem argumento sensível.
+            detalhe = "" if args[0] in ("open", "eval") else f": {(r.stderr or r.stdout).strip()[:300]}"
+            raise Reprovado(f"agent-browser {args[0]} falhou{detalhe}")
+        if json_saida:
+            dados = json.loads(r.stdout)
+            if not dados.get("success"):
+                raise Reprovado(f"agent-browser {args[0]} sem sucesso")
+            return dados["data"]
+        return r.stdout.strip()
+
+    def avaliar(self, js: str):
+        valor = self("eval", js, json_saida=True).get("result")
+        while isinstance(valor, str):
+            try:
+                valor = json.loads(valor)
+            except json.JSONDecodeError:
+                break
+        return valor
+
+    def ref(self, papel: str, nome: str) -> str:
+        """Primeiro controle visível com o papel e o nome (exato, prefixo, trecho); telas repetem botões ocultos."""
+        refs = self("snapshot", "-i", json_saida=True)["refs"]
+        itens = sorted(refs.items(), key=lambda kv: int(kv[0][1:]))
+        candidatos = []
+        for criterio in (lambda n: n == nome, lambda n: n.startswith(nome), lambda n: nome in n):
+            for ref, info in itens:
+                if info.get("role") == papel and criterio(info.get("name") or "") and f"@{ref}" not in candidatos:
+                    candidatos.append(f"@{ref}")
+        for candidato in candidatos:
+            try:
+                b = self("get", "box", candidato, json_saida=True)
+            except Reprovado:
+                continue
+            if float(b.get("width", 0)) > 0 and float(b.get("height", 0)) > 0:
+                return candidato
+        if candidatos:
+            return candidatos[0]
+        raise Reprovado(f"controle não encontrado: {papel} \"{nome}\"")
+
+    def caixa(self, seletor: str | list) -> dict:
+        caixas = []
+        for s in [seletor] if isinstance(seletor, str) else seletor:
+            b = self("get", "box", s, json_saida=True)
+            caixas.append({k: float(b[k]) for k in ("x", "y", "width", "height")})
+        x0 = min(c["x"] for c in caixas)
+        y0 = min(c["y"] for c in caixas)
+        x1 = max(min(c["x"] + c["width"], OUT_W) for c in caixas)
+        y1 = max(min(c["y"] + c["height"], OUT_H) for c in caixas)
+        return {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0}
+
+    def mover_para(self, seletor: str) -> None:
+        # Mira a borda esquerda (ícone do controle), para o ponteiro não cobrir o texto que se quer ler.
+        b = self.caixa(seletor)
+        x = b["x"] + min(8.0, b["width"] / 2)
+        self("mouse", "move", str(round(x)), str(round(b["y"] + b["height"] / 2)), "--duration", "650", "--steps", "32")
+
+
+def verificar_mascara(nav: Navegador, momento: str) -> None:
+    resultado = nav.avaliar("window.__mascaraAplicar && window.__mascaraAplicar(); window.__mascaraVerificar ? window.__mascaraVerificar() : null")
+    if not isinstance(resultado, dict) or resultado.get("restos") != []:
+        tipos = len(resultado.get("restos", [])) if isinstance(resultado, dict) else "?"
+        raise Reprovado(f"máscara reprovada ({momento}): {tipos} tipo(s) de dado sensível visível")
+
+
+# Clique visível: o ponteiro chega, repousa com o halo no alvo, clica (o palco desenha um anel) e a
+# tela fica parada um instante antes da próxima ação. Sem isso, o clique some no meio da transição.
+REPOUSO_CLIQUE = 0.35
+PAUSA_CLIQUE = 0.4        # ao vivo, depois do clique (a tela já mudou)
+# na montagem: o quadro do clique, com o anel, fica parado este tempo (demonstração longa: reduzir)
+CONGELA_CLIQUE = float(os.environ.get("NOV_CONGELA_CLIQUE", "1.0"))
+ATRASO_QUADRO_CLIQUE = 0.08
+CLIQUES = {"menu", "clicar", "clicar_css", "clicar_texto", "digitar", "digitar_css", "direito", "direito_css"}
+
+
+def centro_texto(nav: Navegador, texto: str) -> tuple[int, int]:
+    """Centro do menor elemento visível cujo texto é exatamente `texto` (o primeiro do DOM pode estar oculto)."""
+    js = ("(()=>{const t=" + json.dumps(texto) + ";const c=[...document.querySelectorAll('body *')].filter(e=>e.textContent.trim()===t)"
+          ".map(e=>[e,e.getBoundingClientRect()]).filter(([e,r])=>r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth);"
+          "if(!c.length)return null;const r=c.sort((a,b)=>a[1].width*a[1].height-b[1].width*b[1].height)[0][1];"
+          "return JSON.stringify([Math.round(r.x+r.width/2),Math.round(r.y+r.height/2)])})()")
+    pos = nav.avaliar(js)
+    if not pos:
+        raise Reprovado(f"texto visível não encontrado: \"{texto}\"")
+    return int(pos[0]), int(pos[1])
+
+
+def clicar_em(nav: Navegador, alvo: str | tuple, botao: str = "left") -> None:
+    if isinstance(alvo, tuple):
+        x, y = alvo
+    else:
+        try:
+            nav("scrollintoview", alvo)
+        except Reprovado:
+            pass
+        b = nav.caixa(alvo)
+        x, y = round(b["x"] + b["width"] / 2), round(b["y"] + b["height"] / 2)
+    nav("mouse", "move", str(x), str(y), "--duration", "650", "--steps", "32")
+    time.sleep(REPOUSO_CLIQUE)
+    if not isinstance(alvo, tuple):
+        # a tela pode ter mudado de layout enquanto o ponteiro viajava (lista terminando de carregar)
+        b = nav.caixa(alvo)
+        nx, ny = round(b["x"] + b["width"] / 2), round(b["y"] + b["height"] / 2)
+        if abs(nx - x) > 3 or abs(ny - y) > 3:
+            x, y = nx, ny
+            nav("mouse", "move", str(x), str(y), "--duration", "250", "--steps", "12")
+            time.sleep(REPOUSO_CLIQUE)
+    antes = time.monotonic()
+    nav("mouse", "down", botao)
+    depois = time.monotonic()
+    nav("mouse", "up", botao)
+    if getattr(nav, "t0", None) is not None:
+        # o pointerdown acontece durante o comando "down": meio do intervalo ≈ quadro do anel nascendo
+        nav.cliques.append(round((antes + depois) / 2 - nav.t0, 3))
+
+
+def executar(nav: Navegador, acao: list, esperas: list | None = None, t0: float = 0.0) -> None:
+    verbo, *args = acao
+    if verbo in ("esperar_texto",) and esperas is not None:
+        inicio = time.monotonic() - t0
+        nav("wait", "--text", args[0])
+        esperas.append([round(inicio, 3), round(time.monotonic() - t0, 3)])
+        return
+    if verbo == "clicar_se":
+        try:
+            ref = nav.ref(args[0], args[1])
+        except Reprovado:
+            return
+        nav("click", ref)
+        time.sleep(0.6)
+        return
+    if verbo == "menu":
+        clicar_em(nav, nav.ref("link", args[0]))
+    elif verbo == "clicar":
+        clicar_em(nav, nav.ref(args[0], args[1]))
+    elif verbo == "clicar_css":
+        clicar_em(nav, args[0])
+    elif verbo == "digitar":
+        clicar_em(nav, nav.ref("textbox", args[0]))
+        nav("press", "Control+a")
+        for letra in args[1]:
+            nav("keyboard", "type", letra)
+            time.sleep(0.05)
+    elif verbo == "apontar":
+        nav.mover_para(nav.ref(args[0], args[1]))
+    elif verbo == "apontar_css":
+        nav.mover_para(args[0])
+    elif verbo == "digitar_css":
+        clicar_em(nav, args[0])
+        nav("press", "Control+a")
+        for letra in args[1]:
+            nav("keyboard", "type", letra)
+            time.sleep(0.05)
+    elif verbo in ("direito", "direito_css"):
+        # botão direito no centro do alvo (menus de contexto do Aura exigem coordenadas reais)
+        clicar_em(nav, nav.ref(args[0], args[1]) if verbo == "direito" else args[0], "right")
+    elif verbo == "clicar_texto":
+        clicar_em(nav, centro_texto(nav, args[0]))
+    elif verbo == "rolar_ate":
+        nav("scrollintoview", args[0])
+        time.sleep(0.5)
+    elif verbo == "esperar_texto":
+        nav("wait", "--text", args[0])
+    elif verbo == "esperar_fn":
+        nav("wait", "--fn", args[0])
+    elif verbo == "esperar":
+        time.sleep(int(args[0]) / 1000)
+    elif verbo == "tecla":
+        nav("press", args[0])
+    else:
+        raise Reprovado(f"ação desconhecida no roteiro: {verbo}")
+
+
+def esperar_pronto(nav: Navegador, pronto: dict | None) -> None:
+    if not pronto:
+        return
+    if "texto" in pronto:
+        nav("wait", "--text", pronto["texto"])
+    if "seletor" in pronto:
+        nav("wait", pronto["seletor"])
+    if "fn" in pronto:
+        nav("wait", "--fn", pronto["fn"])
+
+
+def capturar(slug: str, entrada: dict, roteiro: dict, tomada: Path) -> dict:
+    host_api = API.removeprefix("https://")
+    cfg = {"hosts": [host_api], "leituras": roteiro.get("leituras", []), "simulacoes": roteiro.get("simulacoes", [])}
+    guarda = tomada / "init-guarda.js"
+    guarda.write_text(f"window.__GUARDA_CFG = {json.dumps(cfg)};\n" + (GRAVADOR / "guarda.js").read_text())
+    mascara = tomada / "init-mascara.js"
+    extra = mascara_extra(slug)
+    mascara.write_text(
+        (f"window.__MASCARA_EXTRA = {extra.read_text(encoding='utf-8')};\n" if extra else "")
+        + "(() => { const iniciar = () => {\n" + (SKILL / "mascara.js").read_text()
+        + "\n}; if (document.body) iniciar(); else document.addEventListener('DOMContentLoaded', iniciar, { once: true }); })();\n"
+    )
+    nav = Navegador(f"novidades-{slug[:24]}-{os.getpid()}")
+    chave = assinatura(slug)
+    dominios = f"{UI.removeprefix('https://')},{host_api}"
+    meta = {"passos": []}
+    try:
+        print("captura: sessão isolada com máscara, guarda e palco", flush=True)
+        nav("open", UI, globais=("--allowed-domains", dominios, "--init-script", str(guarda), "--init-script", str(mascara), "--init-script", str(GRAVADOR / "palco.js")))
+        nav("set", "viewport", str(OUT_W), str(OUT_H), str(ESCALA))
+        token = subprocess.run([str(RAIZ / "scripts/beta-api-token.sh")], capture_output=True, text=True, env={**os.environ, "BETA_API_URL": API}, check=True).stdout.strip()
+        nav("open", f"{UI}/login?token={token}&cnpj={roteiro['loja']}&redirect_uri={roteiro['origem']}")
+        del token
+        nav("wait", "--fn", "!location.search.includes('token=') && document.body.innerText.trim().length > 200")
+        if roteiro["origem"] not in nav("get", "url"):
+            raise Reprovado("autenticação não chegou à origem do roteiro")
+        nav("wait", "2500")
+        for acao in roteiro.get("preparar", []):
+            executar(nav, acao)
+        verificar_mascara(nav, "início")
+        nav("mouse", "move", str(OUT_W // 2), str(OUT_H // 2))
+        for i, passo in enumerate(roteiro["passos"], start=1):
+            print(f"captura: passo {i}", flush=True)
+            clipe = tomada / f"passo-{i}.mp4"
+            nav("record", "start", str(clipe), "--fps", "30", "--cursor")
+            t0 = time.monotonic()
+            nav.t0, nav.cliques = t0, []
+            esperas: list = []
+            try:
+                for acao in passo.get("acoes", []):
+                    # Ação lenta (página pesada, snapshot demorado) vira espera: a montagem corta
+                    # o miolo e preserva o último segundo, onde o ponteiro de fato se move.
+                    antes = time.monotonic() - t0
+                    try:
+                        executar(nav, acao, esperas, t0)
+                    except Reprovado as erro:
+                        raise Reprovado(f"passo {i}, ação {acao[0]}: {erro}") from None
+                    depois = time.monotonic() - t0
+                    if acao[0] not in ("esperar", "esperar_texto", "esperar_fn") and depois - antes > 2.0:
+                        # preserva o último 1,6 s: chegada do ponteiro, repouso e clique
+                        esperas.append([round(antes, 3), round(depois - 1.2, 3)])
+                    if acao[0] in CLIQUES:
+                        time.sleep(PAUSA_CLIQUE)  # fora das esperas: a montagem não corta
+                inicio_pronto = time.monotonic() - t0
+                try:
+                    esperar_pronto(nav, passo.get("pronto"))
+                except Reprovado as erro:
+                    raise Reprovado(f"passo {i}, pronto: {erro}") from None
+                t_pronto = time.monotonic() - t0
+                esperas.append([round(inicio_pronto, 3), round(t_pronto, 3)])
+                verificar_mascara(nav, f"passo {i}")
+                time.sleep(passo.get("pausa", 2000) / 1000)
+            finally:
+                nav("record", "stop")
+            caixa = nav.caixa(passo["foco"])
+            nav("screenshot", str(tomada / f"passo-{i}.png"))
+            nav.t0 = None
+            meta["passos"].append({"t_pronto": round(t_pronto, 3), "cliques": nav.cliques, "esperas": esperas, "foco": caixa, "zoom": passo.get("zoom", ZOOM_PADRAO)})
+        verificar_mascara(nav, "fim")
+        guarda_estado = nav.avaliar("JSON.stringify(window.__guarda || null)")
+        if not isinstance(guarda_estado, dict):
+            raise Reprovado("guarda de escrita não estava ativa")
+        if guarda_estado["bloqueadas"]:
+            raise Reprovado(f"o roteiro tentou gravar: {sorted(set(guarda_estado['bloqueadas']))}")
+        meta["simuladas"] = guarda_estado["simuladas"]
+        escritas = []
+        for metodo in ("POST", "PUT", "PATCH", "DELETE"):
+            saida = nav("network", "requests", "--method", metodo)
+            for linha in saida.splitlines():
+                m = re.search(r"\b(POST|PUT|PATCH|DELETE)\s+https://([^/\s]+)(/[^\s?]*)", linha)
+                if m and m.group(2) == host_api and not any(re.search(rx, m.group(3)) for rx in cfg["leituras"]):
+                    escritas.append(f"{m.group(1)} {m.group(3)}")
+        if escritas:
+            raise Reprovado(f"escrita chegou à rede: {sorted(set(escritas))}")
+        print("captura: máscara, guarda e rede aprovadas", flush=True)
+    finally:
+        try:
+            nav("close")
+        except Reprovado:
+            pass
+    if assinatura(slug) != chave:
+        raise Reprovado("entrada, roteiro ou máscara mudou durante a captura; capture de novo")
+    meta["assinatura"] = chave
+    (tomada / "meta.json").write_text(json.dumps(meta, indent=1))
+    return meta
+
+
+# ------------------------------------------------------------------ montagem
+def fonte(tamanho: int, peso: int) -> ImageFont.FreeTypeFont:
+    f = ImageFont.truetype(str(FONTE), tamanho)
+    f.set_variation_by_axes([min(40, max(9, tamanho)), peso])
+    return f
+
+
+def runs(texto: str) -> list[tuple[str, bool]]:
+    """Divide o Markdown do passo em trechos normais e em negrito."""
+    partes = re.split(r"(\*\*[^*]+\*\*)", texto)
+    return [(p[2:-2], True) if p.startswith("**") else (p, False) for p in partes if p]
+
+
+def quebrar(trechos, largura, f_normal, f_negrito):
+    linhas, atual, x = [], [], 0.0
+    for texto, negrito in trechos:
+        f = f_negrito if negrito else f_normal
+        for palavra in re.split(r"(\s+)", texto):
+            if not palavra:
+                continue
+            w = f.getlength(palavra)
+            if palavra.isspace():
+                if atual:
+                    atual.append((" ", negrito))
+                    x += w
+                continue
+            if x + w > largura and atual:
+                while atual and atual[-1][0] == " ":
+                    atual.pop()
+                linhas.append(atual)
+                atual, x = [], 0.0
+            atual.append((palavra, negrito))
+            x += w
+    if atual:
+        linhas.append(atual)
+    return linhas
+
+
+def fundo_passo(numero: int, texto: str, destino: Path) -> None:
+    img = Image.new("RGB", (OUT_W, OUT_H))
+    topo, base = (247, 245, 255), (237, 233, 254)
+    px = img.load()
+    for y in range(OUT_H):
+        cor = tuple(round(topo[c] + (base[c] - topo[c]) * y / OUT_H) for c in range(3))
+        for x in range(OUT_W):
+            px[x, y] = cor
+    sombra = Image.new("L", (OUT_W, OUT_H), 0)
+    ImageDraw.Draw(sombra).rounded_rectangle((DEMO_X, DEMO_Y + 6, DEMO_X + DEMO_W, DEMO_Y + DEMO_H + 6), 10, fill=70)
+    sombra = sombra.filter(ImageFilter.GaussianBlur(14))
+    img.paste((91, 33, 182), (0, 0), sombra.point(lambda v: v // 3))
+    d = ImageDraw.Draw(img)
+    faixa_y0, faixa_y1 = DEMO_Y + DEMO_H + 8, OUT_H - 8
+    for tamanho in (30, 27, 24):
+        f_n, f_b = fonte(tamanho, 450), fonte(tamanho, 700)
+        linhas = quebrar(runs(texto), DEMO_W - 64, f_n, f_b)
+        if len(linhas) <= 2:
+            break
+    altura_linha = round(tamanho * 1.3)
+    y = (faixa_y0 + faixa_y1) / 2 - len(linhas) * altura_linha / 2
+    r = 21
+    cy = (faixa_y0 + faixa_y1) / 2
+    d.ellipse((DEMO_X, cy - r, DEMO_X + 2 * r, cy + r), fill=ROXO)
+    f_num = fonte(22, 700)
+    d.text((DEMO_X + r, cy), str(numero), font=f_num, fill="white", anchor="mm")
+    for linha in linhas:
+        x = DEMO_X + 64
+        for palavra, negrito in linha:
+            f = f_b if negrito else f_n
+            d.text((x, y), palavra, font=f, fill=ROXO_INK if negrito else TINTA)
+            x += f.getlength(palavra)
+        y += altura_linha
+    img.save(destino)
+
+
+def duracao(arquivo: Path) -> float:
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(arquivo)], capture_output=True, text=True, check=True)
+    return float(r.stdout.strip())
+
+
+def dimensoes(arquivo: Path) -> tuple[int, int]:
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(arquivo)], capture_output=True, text=True, check=True)
+    w, h = r.stdout.strip().split(",")
+    return int(w), int(h)
+
+
+def regiao_zoom(foco: dict, w: int, h: int, zoom_max: float) -> tuple[float, float, float]:
+    """Zoom e centro (px da tomada) que enquadram o foco com folga, no formato 16:10."""
+    escala = w / OUT_W
+    bx, by, bw, bh = (foco[k] * escala for k in ("x", "y", "width", "height"))
+    largura = max(bw * 1.35, bh * 1.35 * (DEMO_W / DEMO_H), w / zoom_max)
+    z = min(zoom_max, w / largura)
+    if z < 1.15:
+        return 1.0, w / 2, h / 2
+    return z, bx + bw / 2, by + bh / 2
+
+
+def compor_passo(i: int, texto: str, info: dict, tomada: Path) -> Path:
+    clipe = tomada / f"passo-{i}.mp4"
+    w, h = dimensoes(clipe)
+    z, cx, cy = regiao_zoom(info["foco"], w, h, info["zoom"])
+    # Esperas longas (carregamento) perdem o miolo; ficam 0,4 s em cada ponta para o leitor ver
+    # que a tela carregou. O instante do "pronto" é deslocado pelo que foi cortado antes dele.
+    cortes = []
+    for ini, fim in sorted(info.get("esperas", [])):
+        if fim - ini > 1.2:
+            a, b = ini + 0.4, fim - 0.4
+            if cortes and a <= cortes[-1][1]:
+                cortes[-1][1] = max(cortes[-1][1], b)
+            else:
+                cortes.append([a, b])
+    pausa = pausa_inicio(texto)
+
+    def depois_dos_cortes(t: float) -> float:
+        return t - sum(max(0.0, min(b, t) - a) for a, b in cortes if a < t)
+
+    # cada clique congela o quadro logo após o gesto (anel visível) por CONGELA_CLIQUE segundos
+    congelas = sorted(depois_dos_cortes(c + ATRASO_QUADRO_CLIQUE) for c in info.get("cliques", []))
+    tp = pausa + depois_dos_cortes(info["t_pronto"]) + CONGELA_CLIQUE * sum(1 for c in congelas if c < depois_dos_cortes(info["t_pronto"]))
+    selecao = ""
+    if cortes:
+        fora = "+".join(f"between(t,{a:.3f},{b:.3f})" for a, b in cortes)
+        selecao = f"select='not({fora})',setpts=N/30/TB,"
+    quadros = round(CONGELA_CLIQUE * 30)
+    for k, c in enumerate(congelas):
+        # índices já deslocados pelos congelamentos anteriores
+        selecao += f"loop=loop={quadros}:size=1:start={round(c * 30) + k * quadros},setpts=N/30/TB,"
+    fundo = tomada / f"fundo-{i}.png"
+    fundo_passo(i, texto, fundo)
+    # e = progresso suavizado (0→1) a partir do "pronto"; o zoom e o centro seguem e.
+    e = f"(st(0,clip((it-{tp})/{RAMPA_ZOOM},0,1))*ld(0)*(3-2*ld(0)))"
+    zoom = f"1+({z}-1)*{e}"
+    prog = f"if(gt({z},1),(zoom-1)/({z}-1),0)"
+    x = f"clip(({w}/2+({cx}-{w}/2)*{prog})-iw/zoom/2,0,iw-iw/zoom)"
+    y = f"clip(({h}/2+({cy}-{h}/2)*{prog})-ih/zoom/2,0,ih-ih/zoom)"
+    saida = tomada / f"composto-{i}.mp4"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y", "-i", str(clipe), "-loop", "1", "-i", str(fundo),
+        "-filter_complex",
+        f"[0:v]fps=30,{selecao}tpad=start_duration={pausa}:start_mode=clone,zoompan=z='{zoom}':x='{x}':y='{y}':d=1:s={DEMO_W}x{DEMO_H}:fps=30,setsar=1[z];"
+        f"[1:v][z]overlay={DEMO_X}:{DEMO_Y}:shortest=1,format=yuv420p[v]",
+        "-map", "[v]", "-c:v", "libx264", "-preset", "medium", "-crf", "16", "-r", "30", str(saida),
+    ], check=True)
+    return saida
+
+
+def recortar_passo(i: int, info: dict, tomada: Path, destino: Path) -> None:
+    img = Image.open(tomada / f"passo-{i}.png")
+    w, h = img.size
+    z, cx, cy = regiao_zoom(info["foco"], w, h, info["zoom"])
+    rw, rh = w / z, h / z
+    x0 = min(max(cx - rw / 2, 0), w - rw)
+    y0 = min(max(cy - rh / 2, 0), h - rh)
+    img.crop((round(x0), round(y0), round(x0 + rw), round(y0 + rh))).resize((960, 600), Image.LANCZOS).save(destino, optimize=True)
+
+
+def montar(slug: str, entrada: dict, tomada: Path) -> None:
+    meta = json.loads((tomada / "meta.json").read_text())
+    if meta.get("assinatura") != assinatura(slug):
+        raise Reprovado("a tomada não corresponde à entrada, ao roteiro ou à máscara atuais; capture de novo")
+    print("montagem: vinhetas", flush=True)
+    vinheta = tomada / "vinheta"
+    subprocess.run([sys.executable, str(SKILL / "video_artifacts.py"), "vinheta", str(RAIZ), str(SKILL), slug, str(vinheta)], check=True)
+    partes = [vinheta / "abertura.mp4"]
+    for i, (texto, info) in enumerate(zip(entrada["passos"], meta["passos"]), start=1):
+        print(f"montagem: passo {i} (zoom no foco)", flush=True)
+        partes.append(compor_passo(i, texto, info, tomada))
+    partes.append(vinheta / "encerramento.mp4")
+    duracoes = [duracao(p) for p in partes]
+    total = sum(duracoes) - TRANSICAO * (len(partes) - 1)
+    if total > LIMITE_S:
+        raise Reprovado(f"vídeo com {total:.1f}s; máximo {LIMITE_S}s com as vinhetas")
+
+    # vídeo: transições curtas entre vinheta, passos e encerramento
+    entradas_ff, filtros, anterior, acumulado = [], [], "0:v", duracoes[0]
+    for p in partes:
+        entradas_ff += ["-i", str(p)]
+    for k in range(len(partes)):
+        filtros.append(f"[{k}:v]fps=30,format=yuv420p,scale={OUT_W}:{OUT_H},setsar=1,settb=AVTB[p{k}]")
+    anterior = "p0"
+    for k in range(1, len(partes)):
+        offset = acumulado - TRANSICAO * k
+        rotulo = f"x{k}"
+        filtros.append(f"[{anterior}][p{k}]xfade=transition=fade:duration={TRANSICAO}:offset={offset:.3f}[{rotulo}]")
+        anterior, acumulado = rotulo, acumulado + duracoes[k]
+
+    # som: logo sonoro nas vinhetas; trilha da marca só sob os passos (config em vinheta.json)
+    som = json.loads((NOV / "vinheta.json").read_text()).get("som", {})
+    inicio_fim = total - duracoes[-1]
+    audio_in, mix = [], []
+    n = len(partes)
+    logo = vinheta / "logo-sonoro.wav"
+    if logo.is_file():
+        audio_in += ["-i", str(logo), "-i", str(logo)]
+        filtros.append(f"[{n}:a]adelay=200|200[l1]")
+        atraso = int((inicio_fim + 0.2) * 1000)
+        filtros.append(f"[{n + 1}:a]adelay={atraso}|{atraso}[l2]")
+        mix += ["[l1]", "[l2]"]
+    trilha = som.get("trilha")
+    if trilha:
+        if not (NOV / "som/LICENCA.md").is_file():
+            raise Reprovado("som/LICENCA.md ausente: registre a licença da trilha antes de usá-la")
+        ini = duracoes[0] - TRANSICAO + 0.3
+        dur_t = inicio_fim - ini
+        idx = n + (2 if logo.is_file() else 0)
+        audio_in += ["-stream_loop", "-1", "-i", str(NOV / trilha)]
+        filtros.append(
+            f"[{idx}:a]atrim=duration={dur_t:.3f},afade=t=in:d=1,afade=t=out:st={max(0, dur_t - 1.5):.3f}:d=1.5,"
+            f"volume={som.get('volumeTrilha', 0.3)},adelay={int(ini * 1000)}|{int(ini * 1000)}[t]"
+        )
+        mix.append("[t]")
+    # capa: primeiro quadro = quadro final da abertura (logo + título), para a miniatura que
+    # WhatsApp e players tiram do quadro 0; dura um quadro e o áudio atrasa o mesmo tanto.
+    capa = tomada / "capa.png"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-sseof", "-1.0", "-i", str(partes[0]), "-frames:v", "1", "-update", "1", str(capa)], check=True)
+    idx_capa = n + audio_in.count("-i")
+    audio_in += ["-loop", "1", "-framerate", "30", "-t", f"{QUADRO:.4f}", "-i", str(capa)]
+    filtros.append(f"[{idx_capa}:v]fps=30,format=yuv420p,scale={OUT_W}:{OUT_H},setsar=1,settb=AVTB[capa]")
+    filtros.append(f"[capa][{anterior}]concat=n=2:v=1:a=0[vfinal]")
+    anterior = "vfinal"
+    total += QUADRO
+    mapa_audio = []
+    if mix:
+        atraso_capa = round(QUADRO * 1000)
+        filtros.append(f"{''.join(mix)}amix=inputs={len(mix)}:normalize=0,adelay={atraso_capa}|{atraso_capa},apad,atrim=duration={total:.3f}[a]")
+        mapa_audio = ["-map", "[a]", "-c:a", "aac", "-b:a", "128k"]
+
+    saida = tomada / f"{slug}.mp4"
+    print("montagem: vídeo final", flush=True)
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y", *entradas_ff, *audio_in, "-filter_complex", ";".join(filtros),
+        "-map", f"[{anterior}]", *mapa_audio, "-t", f"{total:.3f}",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(saida),
+    ], check=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-xerror", "-i", str(saida), "-f", "null", "-"], check=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(saida), "-vf", f"fps=20/{total:.3f},scale=360:-1,tile=5x4", "-frames:v", "1", str(tomada / "folha.jpg")], check=True)
+
+    # Gera toda a mídia na tomada e só então promove: falha no meio não deixa vídeo novo com
+    # imagens antigas. Vídeo, quadro final (pôster/prévia) e um recorte por passo.
+    pronta = tomada / "publicar"
+    pronta.mkdir(exist_ok=True)
+    Image.open(tomada / f"passo-{len(meta['passos'])}.png").resize((OUT_W, OUT_H), Image.LANCZOS).save(pronta / f"{slug}.png", optimize=True)
+    for i, info in enumerate(meta["passos"], start=1):
+        recortar_passo(i, info, tomada, pronta / f"{slug}-passo-{i}.png")
+    # capa (logo + título): prévia do link da página da funcionalidade no WhatsApp e nas redes
+    shutil.copyfile(capa, pronta / f"{slug}-capa.png")
+    video_dir, img_dir = NOV / "entradas/video", NOV / "entradas/img"
+    video_dir.mkdir(exist_ok=True)
+    img_dir.mkdir(exist_ok=True)
+    # Cada arquivo é trocado de forma atômica (cópia temporária + rename); só depois de tudo no
+    # lugar saem os passos que o roteiro novo deixou de ter.
+    def promover(origem: Path, destino: Path) -> None:
+        temporario = destino.with_name(f".{destino.name}.tmp")
+        shutil.copyfile(origem, temporario)
+        os.replace(temporario, destino)
+
+    novos = {arquivo.name for arquivo in pronta.iterdir()}
+    for arquivo in sorted(pronta.iterdir()):
+        promover(arquivo, img_dir / arquivo.name)
+    promover(saida, video_dir / f"{slug}.mp4")
+    for antiga in img_dir.glob(f"{slug}-passo-*.png"):
+        if antiga.name not in novos:
+            antiga.unlink()  # passo que não existe mais no roteiro atual
+    print(f"vídeo: {video_dir / (slug + '.mp4')} ({total:.1f}s)")
+    print(f"imagens: {img_dir}/{slug}.png e {slug}-passo-1..{len(meta['passos'])}.png")
+    print(f"revisão: {tomada / 'folha.jpg'}")
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if not args or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", args[0]):
+        print(__doc__, file=sys.stderr)
+        return 2
+    slug, modo = args[0], (args[1] if len(args) > 1 else "--completo")
+    if not FONTE.is_file():
+        print(f"fonte ausente: {FONTE} (DM Sans; ver SKILL.md)", file=sys.stderr)
+        return 2
+    try:
+        entrada = ler_entrada(slug)
+        roteiro = ler_roteiro(slug, len(entrada["passos"]))
+        if modo == "--compor":
+            tomada = Path(args[2]).resolve()
+        else:
+            base = Path("/tmp/aura-novidades-video")
+            base.mkdir(exist_ok=True)
+            tomada = Path(tempfile.mkdtemp(prefix=f"{slug}.", dir=base))
+            print(f"tomada: {tomada}", flush=True)
+            # Uma captura por vez na máquina: gravações simultâneas fazem o codificador ficar para trás.
+            with open("/tmp/aura-novidades-gravar.lock", "w") as trava:
+                print("captura: aguardando a vez (uma gravação por vez)", flush=True)
+                fcntl.flock(trava, fcntl.LOCK_EX)
+                capturar(slug, entrada, roteiro, tomada)
+            if modo == "--capturar":
+                print(f"tomada validada; para montar: aura-novidades-gravar {slug} --compor {tomada}")
+                return 0
+        montar(slug, entrada, tomada)
+        return 0
+    except Reprovado as erro:
+        print(f"reprovado: {erro}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

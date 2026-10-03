@@ -1,34 +1,41 @@
 #!/usr/bin/env bash
-# Gera o site e captura home, página do dia mais recente e uma novidade em 1024×768, a resolução
-# habitual do leitor. Uso: aura-novidades-conferir [pasta-de-saida]   (padrão: /tmp/aura-novidades-conferir)
-# Abra os PNGs antes de publicar: densidade, cortes, texto vazando e padrão visual do Aura.
+# Build e inspeção independente do site já servido. Uso: aura-novidades-conferir <url-local> [pasta-de-evidencias-em-/tmp]
 set -euo pipefail
-raiz="${AURA_BETA_ROOT:-$HOME/Projects/beta}/novidades"
-saida="${1:-/tmp/aura-novidades-conferir}"
-porta="${AURA_NOVIDADES_PORTA:-8766}"
-cd "$raiz"
-mkdir -p "$saida"
-
+raiz="${AURA_BETA_ROOT:-$HOME/Projects/beta}"
+url="${1:-${NOV_PREVIEW_URL:-}}"
+[ -n "$url" ] || { echo 'Informe a URL local do site de novidades já servido usando portless.' >&2; exit 2; }
+saida="${2:-/tmp/aura-novidades-conferir}"
+skill="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$raiz/novidades"
 pnpm build
-python3 -m http.server "$porta" --directory dist >/dev/null 2>&1 &
-servidor=$!
-trap 'kill "$servidor" 2>/dev/null || true' EXIT
-sleep 1
-
-dia="$(ls -d dist/20*/ | sed 's|dist/||; s|/$||' | sort | tail -1)"
-novidade="$(ls -d dist/novidades/*/ | grep -v '/img/$' | sed 's|dist||; s|/$||' | sort | tail -1)"
-
-export AGENT_BROWSER_SESSION="$(agent-browser session id --scope worktree --prefix novidades-conferir)"
-agent-browser open "http://127.0.0.1:$porta/" >/dev/null 2>&1
-agent-browser set viewport 1024 768 >/dev/null
-sleep 2
-agent-browser screenshot "$saida/home.png" >/dev/null
-agent-browser open "http://127.0.0.1:$porta/$dia" >/dev/null 2>&1
-sleep 2
-agent-browser screenshot "$saida/dia-$dia.png" >/dev/null
-agent-browser open "http://127.0.0.1:$porta$novidade" >/dev/null 2>&1
-sleep 2
-agent-browser screenshot "$saida/novidade.png" >/dev/null
-agent-browser close >/dev/null 2>&1 || true
-
-echo "conferir: capturas em $saida (home.png, dia-$dia.png, novidade.png) — abrir e avaliar em 1024×768"
+mapfile -t rotas < <(python3 - <<'PY'
+from pathlib import Path
+root = Path('dist')
+for p in sorted(root.glob('meses/*/index.html'))[-1:]:
+    print('/' + str(p.parent.relative_to(root)))
+entries = sorted(root.glob('novidades/*/index.html'))
+for p in entries[-1:]:
+    print('/' + str(p.parent.relative_to(root)))
+for p in [p for p in entries if '<video' in p.read_text()][-1:]:
+    print('/' + str(p.parent.relative_to(root)))
+PY
+)
+[ "${#rotas[@]}" -ge 2 ] || { echo 'Site sem mês/novidade para inspecionar.' >&2; exit 1; }
+args=()
+# Preservar o tier selecionado pelo cliente Codex; Claude só usa Fast por pedido explícito.
+if [[ "${CLAUDECODE:-}" != 1 ]] && python3 - <<'PY'
+import os, pathlib, sys, tomllib
+p = pathlib.Path(os.environ.get('CODEX_HOME', str(pathlib.Path.home()/'.codex'))) / 'config.toml'
+v = tomllib.loads(p.read_text()) if p.exists() else {}
+sys.exit(0 if v.get('service_tier') == 'fast' else 1)
+PY
+then args+=(--fast); fi
+"$skill/../../visual-inspection/scripts/visual-inspection" --repo "$raiz" --url "$url" --output-root "$saida" "${args[@]}" <<EOF_BRIEF
+Objetivo: validar o site local de novidades após o build.
+Alvo: $url, já servido; não iniciar nem encerrar servidores.
+Fluxos: home / (linha do tempo de meses), detalhe do mês ${rotas[0]}, novidade mais recente ${rotas[1]} e amostra com vídeo ${rotas[2]:-ausente}; clicar na chamada do mês na home leva ao detalhe do mês; um link antigo /AAAA-MM-DD redireciona para o mês.
+Viewports: 390x844 (celular, onde o link chega pelo WhatsApp) e 1366x768.
+Critérios: home é uma linha do tempo vertical compacta; o mês mais recente mostra chamada, primeiro parágrafo e a lista de destaques, e a chamada e o primeiro parágrafo aparecem sem rolar em 1366x768 e em 390x844; meses anteriores ocupam poucas linhas; detalhe do mês mostra panorama, cartões de destaque e dia a dia; novidade mostra O que é, Por que importa, Como ajuda na rotina, Como usar e Bom saber; textos legíveis sem cortes, vazamentos ou rolagem horizontal; novidade mais recente conferida independentemente da amostra com vídeo; quadro inicial mascarado (loja como Farmácia Modelo, CNPJ zerado, grupo, usuário e pessoas trocados; produto, código de barras, distribuidores, fabricantes e preços reais são permitidos) e player na largura do conteúdo. Se houver vídeo, reproduzir um trecho e comprovar avanço de currentTime e imagem; não inferir áudio correto só por playback.
+Evidência: screenshots obrigatórios dos estados e vídeo nativo curto para comprovar playback quando houver vídeo. Usar timestamps e quadros do trecho no laudo. Abrir as imagens para inspeção dos pixels. Limitações de áudio devem ser explícitas.
+Não editar conteúdo, publicar, alterar dados ou chamar este script recursivamente. Retornar PASS/FAIL/BLOCKED pelo contrato do runner.
+EOF_BRIEF

@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# Vinheta dos vídeos de novidade, a partir de novidades/vinheta.json (fonte única de parâmetros).
+#
+#   aura-novidades-vinheta --simular [slug]        gera um HTML local com o conceito configurado (e os outros dois)
+#                                                  para ver a animação no browser; imprime o caminho
+#   aura-novidades-vinheta --render <slug> <dir>   renderiza abertura.mp4 e encerramento.mp4 (30 fps) em <dir>,
+#                                                  quadro a quadro a partir da animação CSS, mais logo-sonoro.wav
+#
+# Renderização: a página abre com render=1 (animações pausadas), o script fixa cada instante com
+# Vinheta.quadro(t) e tira um screenshot; o ffmpeg monta os quadros. Assim qualquer conceito em CSS
+# vira vídeo determinístico a 30 fps.
+set -euo pipefail
+skill="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+raiz="${AURA_BETA_ROOT:-$HOME/Projects/beta}"
+nov="$raiz/novidades"
+cfg="$nov/vinheta.json"
+[ -f "$cfg" ] || { echo "config não encontrada: $cfg" >&2; exit 2; }
+
+modo="${1:-}"; slug="${2:-}"; destino="${3:-}"
+
+# ---- parâmetros (config + entrada opcional)
+eval "$(python3 - "$cfg" "$nov/entradas" "$slug" <<'EOF'
+import json,re,sys,shlex
+cfg=json.load(open(sys.argv[1],encoding='utf-8')); pasta=sys.argv[2]; slug=sys.argv[3]
+areas={'mix':'Mix de Produtos','cotacao':'Cotação','carrinho':'Carrinho','catalogo':'Gestão do Catálogo','acordos':'Acordos Comerciais','externas':'Cotações Externas','empacotamentos':'Empacotamentos'}
+titulo,area,data_ext='Título da novidade','Mix de Produtos','2 de setembro de 2026'
+if slug:
+    t=open(f'{pasta}/{slug}.md',encoding='utf-8').read()
+    m=re.match(r'^---\n(.*?)\n---',t,re.S); meta={}
+    for l in m.group(1).split('\n'):
+        if ':' in l: k,v=l.split(':',1); meta[k.strip()]=re.sub(r'\s+#.*$','',v).strip()
+    meses=['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro']
+    y,mo,da=meta['data'].split('-'); titulo=meta['titulo']; area=areas.get(meta.get('area',''),''); data_ext=f"{int(da)} de {meses[int(mo)-1]} de {y}"
+q=shlex.quote
+dur=cfg.get('duracaoSegundos',3)
+if isinstance(dur,dict): ab_dur=dur.get('abertura',3); en_dur=dur.get('encerramento',3)
+else: ab_dur=en_dur=dur
+print('CONCEITO='+q(cfg['conceito'])); print('AB_DUR='+q(str(ab_dur))); print('EN_DUR='+q(str(en_dur))); print('FPS='+q(str(cfg.get('quadrosPorSegundo',30))))
+print('CHIP='+q(cfg.get('chip','Versão Beta'))); print('TITULO='+q(titulo)); print('AREA='+q(area)); print('DATA_EXT='+q(data_ext))
+a=cfg['abertura']; e=cfg['encerramento']
+print('AB_EYEBROW='+q(a['eyebrow'])); print('AB_ROD_ESQ='+q(a['rodapeEsquerda'])); print('AB_ROD_DIR='+q(a['rodapeDireita']))
+print('EN_EYEBROW='+q(e['eyebrow'])); print('EN_TITULO='+q(e['titulo'])); print('EN_URL='+q(e['url'])); print('EN_ROD_ESQ='+q(e['rodapeEsquerda']))
+vd=cfg.get('video',{}); print('OUT_W='+q(str(vd.get('largura',1440)))); print('OUT_H='+q(str(vd.get('altura',900)))); print('ESCALA='+q(str(vd.get('escala',1))))
+print('NOME='+q('1' if cfg.get('assinatura',{}).get('nomeAoLadoDoSimbolo') else '0')); c=cfg.get('cores',{}); print('COR_SIMBOLO='+q(c.get('simbolo','#7c3aed'))); print('COR_NOME='+q(c.get('nome','#111111'))); print('LOGO_SONORO='+q('1' if cfg.get('som',{}).get('logoSonoro') else '0')); print('LOGO_ARQ='+q(cfg.get('som',{}).get('logo') or ''))
+EOF
+)"
+urlenc() { python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$1"; }
+vdir="$nov/vinheta"; [ -f "$vdir/vinheta.html" ] || { echo "modelo não encontrado: $vdir/vinheta.html" >&2; exit 2; }
+du() { echo "data:image/png;base64,$(base64 -w0 "$vdir/assets/$1")"; }
+logo="$(du aitrus-logo.png)"; marca="$(du aitrus-simbolo.png)"; nome_img="$(du aitrus-nome.png)"
+pecas="&arcos=$(urlenc "$(du orbita-arcos.png)")&ponto1=$(urlenc "$(du orbita-ponto-1.png)")&ponto2=$(urlenc "$(du orbita-ponto-2.png)")&ponto3=$(urlenc "$(du orbita-ponto-3.png)")"
+url_vinheta() { # tipo conceito extra
+  local tipo="$1" conceito="$2" extra="$3"
+  if [ "$tipo" = abertura ]; then
+    echo "file://$vdir/vinheta.html?tipo=abertura&conceito=$conceito&duracao=$AB_DUR&titulo=$(urlenc "$TITULO")&data=$(urlenc "$DATA_EXT")&area=$(urlenc "$AREA")&chip=$(urlenc "$CHIP")&eyebrow=$(urlenc "$AB_EYEBROW")&rodapeEsq=$(urlenc "$AB_ROD_ESQ")&rodapeDir=$(urlenc "$AB_ROD_DIR")&logo=$(urlenc "$logo")&marca=$(urlenc "$marca")&nome=$NOME&nome_img=$(urlenc "$nome_img")&corSimbolo=$(urlenc "$COR_SIMBOLO")&corNome=$(urlenc "$COR_NOME")$pecas$extra"
+  else
+    echo "file://$vdir/vinheta.html?tipo=encerramento&conceito=$conceito&duracao=$EN_DUR&titulo=$(urlenc "$EN_TITULO")&url=$(urlenc "$EN_URL")&chip=$(urlenc "$CHIP")&eyebrow=$(urlenc "$EN_EYEBROW")&rodapeEsq=$(urlenc "$EN_ROD_ESQ")&rodapeDir=$(urlenc "$DATA_EXT")&logo=$(urlenc "$logo")&marca=$(urlenc "$marca")&nome=$NOME&nome_img=$(urlenc "$nome_img")&corSimbolo=$(urlenc "$COR_SIMBOLO")&corNome=$(urlenc "$COR_NOME")$pecas$extra"
+  fi
+}
+
+case "$modo" in
+--simular)
+  out="/tmp/aura-novidades-vinheta/simulador.html"; mkdir -p "$(dirname "$out")"
+  {
+    echo '<!doctype html><meta charset="utf-8"><title>Simulador da vinheta</title>'
+    echo '<style>body{margin:0;padding:24px;font-family:"DM Sans",system-ui,sans-serif;background:#f9fafb;color:#1f2937}h1{font-size:20px;margin:0 0 4px}p{margin:0 0 16px;color:#4b5563;font-size:14px}.g{display:grid;grid-template-columns:1fr 1fr;gap:18px}.c{border:1px solid #e5e7eb;border-radius:8px;background:#fff;padding:12px}.c h2{font-size:14px;margin:0 0 8px;display:flex;justify-content:space-between;align-items:center}.c b{color:#7c3aed}.c iframe{width:100%;aspect-ratio:16/10;border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb}button{font:inherit;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #d1d5db;background:#fff;cursor:pointer}</style>'
+    echo "<h1>Simulador da vinheta</h1><p>Config: <code>$cfg</code> · conceito ativo: <b>$CONCEITO</b> · abertura ${AB_DUR}s · encerramento ${EN_DUR}s. Edite o JSON e rode de novo para ver a mudança.</p><div class=\"g\">"
+    for tipo in abertura encerramento; do
+      outros=""; for c in orbita filete foco; do [ "$c" = "$CONCEITO" ] || outros="$outros $c"; done
+      for c in "$CONCEITO" $outros; do
+        if [ "$c" = "$CONCEITO" ]; then rot="ATIVO · $c"; else rot="$c"; fi
+        u="$(url_vinheta "$tipo" "$c" "&autoplay=1")"
+        echo "<div class=\"c\"><h2><span>$tipo · <b>$rot</b></span><button onclick=\"this.closest('.c').querySelector('iframe').contentWindow.location.reload()\">↻ repetir</button></h2><iframe src=\"$u\"></iframe></div>"
+      done
+    done
+    echo '</div>'
+  } > "$out"
+  echo "simulador: $out"
+  echo "abrir no Windows: \\\\wsl.localhost\\Ubuntu${out//\//\\}"
+  ;;
+--render)
+  [ -n "$slug" ] && [ -n "$destino" ] || { echo "uso: aura-novidades-vinheta --render <slug> <dir>" >&2; exit 2; }
+  mkdir -p "$destino"
+  export AGENT_BROWSER_SESSION="$(agent-browser session id --scope worktree --prefix "novidades-vinheta-$$")"
+  trap 'agent-browser close >/dev/null 2>&1 || true' EXIT
+  for tipo in abertura encerramento; do
+    if [ "$tipo" = abertura ]; then dur="$AB_DUR"; else dur="$EN_DUR"; fi
+    total="$(python3 -c "print(int(round($dur*$FPS)))")"
+    quadros="$(mktemp -d "$destino/quadros-$tipo.XXXXXX")"
+    agent-browser open "$(url_vinheta "$tipo" "$CONCEITO" "&render=1")" >/dev/null 2>&1
+    agent-browser set viewport "$OUT_W" "$OUT_H" "$ESCALA" >/dev/null
+    agent-browser wait --fn "Boolean(window.Vinheta) && document.fonts.status === 'loaded' && [...document.images].every(i => i.complete && i.naturalWidth > 0)" >/dev/null
+    tempos="$(python3 -c "print(' '.join(str(i/$FPS) for i in range($total)))")"
+    i=0
+    for t in $tempos; do
+      agent-browser eval "window.Vinheta.quadro($t)" >/dev/null
+      agent-browser screenshot "$(printf '%s/q%04d.png' "$quadros" "$i")" >/dev/null
+      i=$((i+1))
+    done
+    ffmpeg -v error -y -framerate "$FPS" -i "$quadros/q%04d.png" -vf "scale=$OUT_W:$OUT_H:flags=lanczos" -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p "$destino/$tipo.mp4"
+    echo "vinheta $tipo: $destino/$tipo.mp4 ($total quadros, ${dur}s)"
+  done
+  agent-browser close >/dev/null 2>&1 || true
+  # logo sonoro: três notas curtas (uma por ponto da marca), acorde maior, com ataque e cauda suaves
+  if [ "$LOGO_SONORO" = 1 ] && [ -n "$LOGO_ARQ" ] && [ -f "$nov/$LOGO_ARQ" ]; then
+    ffmpeg -v error -y -i "$nov/$LOGO_ARQ" -ar 48000 -ac 2 "$destino/logo-sonoro.wav"
+    echo "logo sonoro: $destino/logo-sonoro.wav (de $LOGO_ARQ)"
+  elif [ "$LOGO_SONORO" = 1 ]; then
+    ffmpeg -v error -y -f lavfi -i "sine=frequency=523.25:duration=1.4" -f lavfi -i "sine=frequency=659.25:duration=1.28" -f lavfi -i "sine=frequency=783.99:duration=1.16" \
+      -filter_complex "[0:a]adelay=0|0,afade=t=in:d=0.02,afade=t=out:st=0.5:d=0.9,volume=0.35[n1];[1:a]adelay=120|120,afade=t=in:d=0.02,afade=t=out:st=0.5:d=0.78,volume=0.3[n2];[2:a]adelay=240|240,afade=t=in:d=0.02,afade=t=out:st=0.5:d=0.66,volume=0.28[n3];[n1][n2][n3]amix=inputs=3:normalize=0,lowpass=f=4200,aresample=48000[a]" \
+      -map "[a]" -t 1.6 "$destino/logo-sonoro.wav"
+    echo "logo sonoro: $destino/logo-sonoro.wav"
+  fi
+  ;;
+*) echo "uso: aura-novidades-vinheta --simular [slug] | --render <slug> <dir>" >&2; exit 2 ;;
+esac

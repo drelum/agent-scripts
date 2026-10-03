@@ -21,12 +21,18 @@ nov_login() {
   export AGENT_BROWSER_SESSION="$(agent-browser session id --scope worktree --prefix novidades)"
   local token
   token="$(BETA_API_URL="$NOV_API" "$NOV_RAIZ/scripts/beta-api-token.sh")" || { echo "nov_login: falha ao obter token" >&2; return 1; }
-  agent-browser --allowed-domains "${NOV_UI#https://},${NOV_API#https://}" \
-    open "$NOV_UI/login?token=${token}&cnpj=${NOV_CNPJ}&redirect_uri=${rota}" >/dev/null 2>&1
+  if ! agent-browser --allowed-domains "${NOV_UI#https://},${NOV_API#https://}" \
+    open "$NOV_UI/login?token=${token}&cnpj=${NOV_CNPJ}&redirect_uri=${rota}" >/dev/null 2>&1; then
+    unset token
+    nov_fim
+    return 1
+  fi
   unset token
   agent-browser set viewport 1440 900 >/dev/null
-  sleep 8
-  agent-browser wait --load networkidle >/dev/null 2>&1 || true
+  if ! agent-browser wait --url "$NOV_UI$rota*" >/dev/null || ! agent-browser wait --fn "document.readyState === 'complete' && !location.search.includes('token=') && document.body.innerText.trim().length > 0" >/dev/null; then
+    nov_fim
+    return 1
+  fi
   local url
   url="$(agent-browser get url)"
   case "$url" in
@@ -40,14 +46,13 @@ nov_shot() {
   local destino="$1"
   [ -n "$destino" ] || { echo "nov_shot: informe o arquivo de destino" >&2; return 1; }
   local resultado
-  resultado="$(agent-browser eval "$(cat "$NOV_MASCARA")" 2>&1 | tail -1)"
-  # agent-browser devolve a string JSON com aspas escapadas: aceitar as duas formas
-  case "$resultado" in
-    *'restos\":[]'*|*'restos":[]'*) ;;
-    *) echo "nov_shot: dado sensível ainda visível → $resultado" >&2; return 1 ;;
-  esac
+  resultado="$(agent-browser eval --stdin < "$NOV_MASCARA")" || return 1
+  if ! printf '%s' "$resultado" | python3 -c 'import json,sys; v=json.load(sys.stdin); v=json.loads(v) if isinstance(v,str) else v; sys.exit(0 if isinstance(v,dict) and v.get("restos")==[] else 1)'; then
+    echo "nov_shot: máscara não validada; captura cancelada" >&2
+    return 1
+  fi
   agent-browser screenshot "$destino" >/dev/null || return 1
-  echo "nov_shot: $destino ($resultado)"
+  echo "nov_shot: $destino (máscara verificada)"
 }
 
 nov_fim() {

@@ -6,14 +6,21 @@
 set -euo pipefail
 cd "${AURA_BETA_ROOT:-$HOME/Projects/beta}/novidades"
 
-# Guarda: nenhuma imagem versionada pode conter o nome real da loja/grupo no nome do arquivo,
-# e nenhum texto de entrada pode citar loja, CNPJ ou grupo do ambiente de testes.
-if grep -rlE 'Drogarias Da Vovo|Genivaldo|05\.101\.867|05101867' entradas dias 2>/dev/null; then
+# Guarda: publicar só o que está commitado, para o site no ar corresponder ao repositório.
+if [ -n "$(git status --porcelain -- .)" ]; then
+  git status --short -- . >&2
+  echo "publicar: há mudanças não commitadas em novidades/ — commite antes de publicar" >&2
+  exit 1
+fi
+
+# Guarda: nenhum texto publicado (entradas/*.md, meses/*.md) pode citar loja, CNPJ ou grupo do
+# ambiente de testes. Roteiros e contexto/ não vão ao ar: o roteiro precisa do CNPJ da loja gravada.
+if grep -lE 'Drogarias Da Vovo|Genivaldo|05\.101\.867|05101867' entradas/*.md meses/*.md 2>/dev/null; then
   echo "publicar: texto com dado sensível nos arquivos acima — corrija antes de publicar" >&2
   exit 1
 fi
 
-# Build; qualquer aviso (ex.: dia sem chamada) bloqueia a publicação.
+# Build; qualquer aviso (ex.: panorama fora do tamanho, novidade longa) bloqueia a publicação.
 saida_build="$(pnpm build 2>&1)" || { echo "$saida_build"; exit 1; }
 echo "$saida_build"
 if echo "$saida_build" | grep -q '^aviso:'; then
@@ -32,7 +39,7 @@ base="https://novidades.aitrus.com.br"
 # O alias leva alguns segundos para propagar na borda: até 3 rodadas com pausa.
 for rodada in 1 2 3; do
   falhas=0
-  for caminho in / $(ls -d dist/20*/ | sed 's|dist||; s|/$||') $(ls -d dist/novidades/*/ | grep -v '/img/$' | sed 's|dist||; s|/$||'); do
+  for caminho in / $(ls -d dist/meses/*/ dist/20*/ dist/edicoes/*/ | sed 's|dist||; s|/$||') $(ls -d dist/novidades/*/ | grep -vE '/(img|video)/$' | sed 's|dist||; s|/$||'); do
     codigo="$(curl -s -o /dev/null -w '%{http_code}' -m 20 --resolve novidades.aitrus.com.br:443:76.76.21.21 "$base$caminho" || echo 000)"
     [ "$codigo" = 200 ] || { echo "  $codigo $caminho"; falhas=$((falhas + 1)); }
   done

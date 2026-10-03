@@ -1,0 +1,414 @@
+#!/usr/bin/env bash
+# Prepara e captura a novidade, depois compõe: abertura → demonstração no Aura Beta com ponteiro,
+# halo e cartões de passo → vinheta de encerramento. Saída: entradas/video/<slug>.mp4 (tamanho de `video` em vinheta.json,
+# H.264, faststart) e entradas/video/<slug>-capa.png (capa do player).
+#
+# Uso: aura-novidades-video <slug> [--preparar | --capturar | --compor <diretorio-da-tomada>]
+#   <slug>      nome da entrada (entradas/<slug>.md) — o roteiro fica em entradas/roteiros/<slug>.sh
+#
+# O roteiro é um shell sourced que define ROTA (origem da navegação, não a tela final),
+# ENTRADA_TIPO (menu ou aria), ENTRADA_DESTINO (rótulo exato ou início do aria-label),
+# ENTRADA_CONFIRMA (texto visível após entradas do tipo aria), a função roteiro() e, se necessário,
+# preparar_antes_mascara() para pré-carregar outra tela e voltar à ROTA, preparar() para apenas
+# aguardar a tela inicial, a função roteiro() e os helpers abaixo:
+#   passo N "Título" "Texto" [JS]      aguarda condição opcional antes do cartão
+#   aguardar "Condição esperada" "JS"  espera observável com diagnóstico nomeado
+#   entrar_destino "<controle>"         primeira interação obrigatória; hover + clique na entrada real
+#   hover  <role> "<nome>"             move o ponteiro até o controle (halo)
+#   clique <role> "<nome>"             hover + clique com anel
+#   clique_conteudo "<texto inicial>"  clique no menor controle cujo texto começa pelo trecho
+#   texto  "<placeholder>" "<valor>"   preenche um campo pelo placeholder
+#   preencher_role <role> "<nome>" "<valor>"  preenche um controle pelo nome acessível
+#   preencher_aria "<início do aria-label>" "<valor>"  preenche controle pelo aria-label estável
+#   apontar_aria "<início do aria-label>"  move o ponteiro até um controle pelo aria-label estável
+#   apontar "<texto visível>"          hover sobre um texto qualquer da página
+#   apontar_conteudo "<texto inicial>" move o ponteiro ao menor elemento cujo texto começa pelo trecho
+#   clique_texto "<texto visível>"     hover + clique num texto (linha de tabela, item de menu)
+#   direito_texto "<texto visível>"    botão direito sobre um texto (ex.: nome do produto)
+#   direito_aria "<início do aria-label>" botão direito no controle identificado por aria-label
+#   campo "<placeholder>"              hover num campo pelo placeholder, sem digitar
+#   tecla <Escape|Enter|...>           tecla solta (fechar menu/modal)
+#   espera <ms>
+# Nunca grave algo que altere dados do Aura Beta: hover em "Salvar" é permitido, clique não.
+set -Eeuo pipefail
+etapa=inicialização
+acao=contrato
+trap 'echo "falha: etapa=$etapa; ação=$acao; ${BASH_SOURCE[0]##*/}:${LINENO}; chamadas=${BASH_LINENO[*]}" >&2' ERR
+
+slug="${1:-}"; [[ "$slug" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "uso: aura-novidades-video <slug>" >&2; exit 2; }
+modo="${2:---completo}"
+case "$modo:$#" in
+  --completo:1|--preparar:2|--capturar:2|--compor:3) ;;
+  *) echo "uso: aura-novidades-video <slug> [--preparar | --capturar | --compor <diretorio-da-tomada>]" >&2; exit 2;;
+esac
+for ferramenta in ffmpeg ffprobe python3; do command -v "$ferramenta" >/dev/null || { echo "dependência ausente: $ferramenta" >&2; exit 2; }; done
+if [ "$modo" != --compor ]; then
+  agent-browser record --help | grep -q -- '--cursor' || { echo "agent-browser precisa oferecer record --cursor" >&2; exit 2; }
+fi
+skill="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+raiz="${AURA_BETA_ROOT:-$HOME/Projects/beta}"
+nov="$raiz/novidades"
+entrada="$nov/entradas/$slug.md"
+roteiro="$nov/entradas/roteiros/$slug.sh"
+[ -f "$entrada" ] || { echo "entrada não encontrada: $entrada" >&2; exit 2; }
+[ -f "$roteiro" ] || { echo "roteiro não encontrado: $roteiro" >&2; exit 2; }
+# Carregar e validar o contrato do roteiro antes de renderizar vinhetas ou abrir o navegador.
+# shellcheck disable=SC1090
+source "$roteiro"
+: "${ROTA:?roteiro sem ROTA de origem}"
+: "${ENTRADA_TIPO:?roteiro sem ENTRADA_TIPO}"
+: "${ENTRADA_DESTINO:?roteiro sem ENTRADA_DESTINO}"
+case "$ENTRADA_TIPO" in
+  menu) ;;
+  aria) : "${ENTRADA_CONFIRMA:?roteiro com ENTRADA_TIPO=aria sem ENTRADA_CONFIRMA}" ;;
+  *) echo "roteiro com ENTRADA_TIPO inválido: $ENTRADA_TIPO" >&2; exit 2 ;;
+esac
+UI="${NOV_UI:-https://ui.beta.aura.localhost}"; API="${NOV_API:-https://api.beta.aura.localhost}"; CNPJ="${NOV_CNPJ:-05101867000157}"
+mkdir -p /tmp/aura-novidades-video "$nov/entradas/video"
+if [ "$modo" = --compor ]; then
+  tmp="$(realpath -e -- "$3")"
+else
+  tmp="$(mktemp -d "/tmp/aura-novidades-video/$slug.XXXXXX")"
+fi
+assinatura="$(python3 "$skill/video_artifacts.py" signature capture "$raiz" "$skill" "$slug")"
+if [ "$modo" = --compor ]; then
+  python3 "$skill/video_artifacts.py" check "$tmp" "$assinatura" demo.mp4
+fi
+echo "artefatos desta execução: $tmp"
+saida="$nov/entradas/video/$slug.mp4"; capa="$nov/entradas/video/$slug-capa.png"
+
+# ---- metadados da entrada (título, data, área, menu) sem expor nada
+eval "$(python3 - "$entrada" "$nov/vinheta.json" <<'EOF'
+import re,sys,shlex
+t=open(sys.argv[1],encoding='utf-8').read()
+m=re.match(r'^---\n(.*?)\n---',t,re.S); meta={}
+for l in m.group(1).split('\n'):
+    if ':' in l: k,v=l.split(':',1); meta[k.strip()]=re.sub(r'\s+#.*$','',v).strip()
+areas={'mix':'Mix de Produtos','cotacao':'Cotação','carrinho':'Carrinho','catalogo':'Gestão do Catálogo','acordos':'Acordos Comerciais','externas':'Cotações Externas','empacotamentos':'Empacotamentos'}
+d=meta['data']; y,mo,da=d.split('-')
+meses=['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro']
+import json; vd=json.load(open(sys.argv[2],encoding='utf-8')).get('video',{}); print('OUT_W='+shlex.quote(str(vd.get('largura',1440)))); print('OUT_H='+shlex.quote(str(vd.get('altura',900)))); print('ESCALA='+shlex.quote(str(vd.get('escala',1))))
+print('TITULO='+shlex.quote(meta['titulo'])); print('AREA='+shlex.quote(areas.get(meta.get('area',''),''))); print('DATA_EXT='+shlex.quote(f"{int(da)} de {meses[int(mo)-1]} de {y}"))
+EOF
+)"
+
+# ---- preparação e captura compartilham o mesmo caminho, inclusive os hooks do roteiro.
+aguardar() { acao="$1"; ab wait --fn "$2" >/dev/null; }
+executar_captura() {
+etapa=preparação
+browser_aberto=0
+export AGENT_BROWSER_SESSION="$(agent-browser session id --scope worktree --prefix novidades-video)-${tmp##*.}"
+ab() {
+  local status=0
+  agent-browser --allowed-domains "${UI#https://},${API#https://}" "$@" || status=$?
+  if [ "$status" -ne 0 ]; then
+    # Nome do comando é seguro; argumentos podem conter bootstrap, dados ou JavaScript.
+    echo "comando browser falhou: $1; etapa=$etapa; ação=$acao" >&2
+  fi
+  return "$status"
+}
+token="$(BETA_API_URL="$API" "$raiz/scripts/beta-api-token.sh")"
+bootstrap="$UI/login?token=${token}&cnpj=${CNPJ}&redirect_uri=${ROTA}"
+unset token
+gravando=0
+parar_gravacao() {
+  if [ "$gravando" -eq 1 ]; then
+    # O stop pode falhar depois de já encerrar a tomada. Não repeti-lo na limpeza.
+    gravando=0
+    ab record stop >/dev/null || return 1
+  fi
+}
+finalizar() {
+  local status=$?
+  trap - EXIT
+  trap - ERR
+  if ! parar_gravacao; then
+    echo "falha secundária ao finalizar a gravação; artefatos em $tmp" >&2
+    [ "$status" -ne 0 ] || status=1
+  fi
+  if [ "$status" -ne 0 ] && [ "$browser_aberto" -eq 1 ]; then
+    local mascara_erro
+    if mascara_erro="$(ab eval --stdin < "$skill/mascara.js" 2>/dev/null)" && validar_mascara "$mascara_erro"; then
+      ab screenshot "$tmp/falha.png" >/dev/null 2>&1 || true
+    fi
+  fi
+  if [ "$browser_aberto" -eq 1 ]; then ab close >/dev/null 2>&1 || true; fi
+  if [ "$status" -ne 0 ]; then echo "execução reprovada; artefatos preservados em $tmp" >&2; fi
+  exit "$status"
+}
+interromper() { exit 130; }
+validar_mascara() {
+  MASCARA_RESULTADO="$1" python3 - <<'PY'
+import json
+import os
+import sys
+
+resultado = os.environ['MASCARA_RESULTADO'].strip()
+try:
+    valor = json.loads(resultado)
+    while isinstance(valor, str):
+        valor = json.loads(valor)
+except (json.JSONDecodeError, TypeError):
+    print('retorno inválido da verificação da máscara', file=sys.stderr)
+    raise SystemExit(1)
+
+restos = valor.get('restos') if isinstance(valor, dict) else None
+if restos == []:
+    raise SystemExit(0)
+if isinstance(restos, list):
+    print(f'dado sensível ainda visível: {len(restos)} tipo(s)', file=sys.stderr)
+else:
+    print('retorno inválido da verificação da máscara', file=sys.stderr)
+raise SystemExit(1)
+PY
+}
+js() { python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$1"; }
+estado_entrada() {
+  if [ "$ENTRADA_TIPO" = "menu" ]; then
+    ab eval "(()=>{const nome=$(js "$ENTRADA_DESTINO");const links=[...document.querySelectorAll('a')].filter(e=>e.textContent.trim()===nome&&e.getClientRects().length);if(links.length===0)return 'ausente';if(links.length!==1)return 'ambiguo';const e=links[0];return e.getAttribute('data-active')==='true'||e.getAttribute('aria-current')==='page'})()" 2>/dev/null
+  else
+    ab eval "(()=>{const inicio=$(js "$ENTRADA_DESTINO");const itens=[...document.querySelectorAll('[aria-label]')].filter(e=>(e.getAttribute('aria-label')||'').startsWith(inicio)&&e.getClientRects().length);if(itens.length===0)return 'ausente';if(itens.length!==1)return 'ambiguo';return 'disponivel'})()" 2>/dev/null
+  fi | tr -d '"'
+}
+trap finalizar EXIT
+trap interromper INT TERM HUP
+# Configurar a página antes de autenticar e capturar.
+acao='autenticação e rota inicial'; echo "$etapa: $acao"
+browser_aberto=1
+ab --args "--force-device-scale-factor=$ESCALA" open "$UI" >/dev/null 2>&1
+ab set viewport "$OUT_W" "$OUT_H" >/dev/null
+ab open "$bootstrap" >/dev/null 2>&1
+unset bootstrap
+ab wait --url "$UI$ROTA*" >/dev/null
+ab wait --fn "document.readyState === 'complete' && !location.search.includes('token=') && document.body.innerText.trim().length > 0" >/dev/null
+case "$(ab get url)" in *token=*) echo "bootstrap não concluiu" >&2; exit 1;; esac
+# Pré-carga fora da gravação pode navegar, mas precisa terminar novamente na ROTA. A máscara será
+# instalada depois, já no documento que será capturado.
+if declare -F preparar_antes_mascara >/dev/null; then
+  acao='pré-carga e retorno à origem'; echo "$etapa: $acao"
+  preparar_antes_mascara
+  case "$(ab get url)" in "$UI$ROTA"*) ;; *) echo "pré-carga não retornou à rota inicial $ROTA" >&2; exit 1;; esac
+fi
+# máscara (com observador) e overlay — antes de qualquer quadro ser capturado
+acao='máscara e cartões'; echo "$etapa: $acao"
+resultado="$(ab eval --stdin < "$skill/mascara.js")"
+validar_mascara "$resultado"
+ab eval --stdin < "$skill/video-overlay.js" >/dev/null
+# ponteiro parte do centro da tela
+ab mouse move "$((OUT_W/2))" "$((OUT_H/2))" >/dev/null
+# Esperas seguras do roteiro acontecem antes da captura. Este hook não pode navegar, pois isso
+# removeria a máscara e o overlay do documento. Nunca criar, editar ou salvar dados no Aura Beta.
+if declare -F preparar >/dev/null; then preparar; fi
+estado_inicial="$(estado_entrada)"
+if [ "$ENTRADA_TIPO" = "menu" ]; then
+  [ "$estado_inicial" = "false" ] || {
+    echo "rota inicial inválida: o item '$ENTRADA_DESTINO' precisa existir e começar desmarcado (estado $estado_inicial)" >&2
+    exit 1
+  }
+else
+  [ "$estado_inicial" = "disponivel" ] || {
+    echo "rota inicial inválida: o controle '$ENTRADA_DESTINO' precisa existir uma única vez (estado $estado_inicial)" >&2
+    exit 1
+  }
+fi
+if [ "$modo" = --preparar ]; then
+  ab screenshot "$tmp/preparacao.png" >/dev/null
+  echo "preparação validada: $tmp/preparacao.png; roteiro ainda não capturado"
+  return
+fi
+etapa=captura
+acao='iniciar tomada nativa'
+# Capturar a página ativa já autenticada e mascarada; não passar URL ao gravador.
+ab record start "$tmp/demo.mp4" --fps 30 --cursor >/dev/null
+gravando=1
+echo 'captura nativa iniciada'
+
+# ---- helpers do roteiro
+passo() {
+  acao="cartão $1: $2"
+  if [ -n "${4:-}" ]; then ab wait --fn "$4" >/dev/null; fi
+  ab eval "window.AuraDemo.passo({numero:$(js "$1"),titulo:$(js "$2"),texto:$(js "$3")});1" >/dev/null; }
+sem_passo() { ab eval "window.AuraDemo.esconderPasso();1" >/dev/null; }
+aviso() { echo "gravação reprovada: $*" >&2; exit 1; }
+entrada_iniciada=0
+exigir_entrada_iniciada() {
+  [ "$entrada_iniciada" -eq 1 ] || {
+    echo "roteiro inválido: a primeira interação deve ser entrar_destino '$ENTRADA_DESTINO'" >&2
+    exit 1
+  }
+}
+entrar_destino() {
+  [ "$entrada_iniciada" -eq 0 ] || { echo "roteiro inválido: entrar_destino só pode ocorrer uma vez" >&2; exit 1; }
+  [ "$1" = "$ENTRADA_DESTINO" ] || { echo "roteiro inválido: entrar_destino '$1' difere de ENTRADA_DESTINO '$ENTRADA_DESTINO'" >&2; exit 1; }
+  if [ "$ENTRADA_TIPO" = "menu" ]; then
+    ab find role link hover --name "$1" >/dev/null 2>&1 || aviso "menu '$1' não encontrado para hover"
+    sleep 0.7
+    ab find role link click --name "$1" >/dev/null 2>&1 || aviso "menu '$1' não encontrado para clique"
+  else
+    local xy
+    xy="$(aria_centro "$1")"
+    if [ -z "$xy" ]; then aviso "aria-label '$1' não encontrado para entrada"; entrada_iniciada=1; return; fi
+    ab mouse move $xy >/dev/null
+    sleep 0.7
+    ab mouse down left >/dev/null 2>&1 || aviso "clique no controle '$1' falhou"
+    ab mouse up left >/dev/null 2>&1 || aviso "clique no controle '$1' falhou"
+  fi
+  entrada_iniciada=1
+
+  local confirmado=false
+  for _ in $(seq 1 40); do
+    if [ "$ENTRADA_TIPO" = "menu" ]; then
+      [ "$(estado_entrada)" = "true" ] && confirmado=true
+    else
+      [ "$(ab eval "document.body.innerText.includes($(js "$ENTRADA_CONFIRMA"))" 2>/dev/null)" = "true" ] && confirmado=true
+    fi
+    [ "$confirmado" = true ] && break
+    sleep 0.25
+  done
+  [ "$confirmado" = true ] || aviso "entrada '$1' não confirmou o destino"
+}
+hover() { exigir_entrada_iniciada; ab find role "$1" hover --name "$2" >/dev/null 2>&1 || aviso "hover $1 '$2' não encontrado"; }
+clique() { hover "$1" "$2"; sleep 0.7; ab find role "$1" click --name "$2" >/dev/null 2>&1 || aviso "clique $1 '$2' não encontrado"; }
+texto() { exigir_entrada_iniciada; ab find placeholder "$1" hover >/dev/null 2>&1 || true; sleep 0.5; ab find placeholder "$1" fill "$2" >/dev/null 2>&1 || aviso "campo '$1' não encontrado"; }
+preencher_role() { hover "$1" "$2"; sleep 0.5; ab find role "$1" click --name "$2" >/dev/null 2>&1 || { aviso "$1 '$2' não encontrado"; return; }; ab press Control+a >/dev/null 2>&1 || aviso "seleção do $1 '$2' falhou"; ab keyboard type "$3" >/dev/null 2>&1 || aviso "digitação no $1 '$2' falhou"; ab press Tab >/dev/null 2>&1 || aviso "saída do $1 '$2' falhou"; }
+apontar() { exigir_entrada_iniciada; ab find text "$1" hover >/dev/null 2>&1 || aviso "texto '$1' não encontrado"; }
+# botão direito: move o ponteiro real até o centro do elemento (o menu de contexto exige coordenadas) e abre o menu
+# escolhe o MENOR elemento cujo texto começa pelo trecho (evita cair no contêiner da linha inteira)
+centro() { ab eval "(()=>{const t=$(js "$1");const c=[...document.querySelectorAll('button,a,td,th,span,div,label,p')].map(x=>[x,x.getBoundingClientRect()]).filter(([x,r])=>x.textContent.trim().startsWith(t)&&x.getClientRects().length&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth);if(!c.length)return '';const e=c.sort((a,b)=>a[1].width*a[1].height-b[1].width*b[1].height)[0][1];return Math.round(e.x+e.width/2)+' '+Math.round(e.y+e.height/2)})()" 2>/dev/null | tr -d '"'; }
+clique_conteudo() { exigir_entrada_iniciada; local xy; xy="$(centro "$1")"; if [ -z "$xy" ]; then aviso "texto '$1' não encontrado para clique"; return; fi; ab mouse move $xy >/dev/null; sleep 0.7; ab mouse down left >/dev/null 2>&1 || { aviso "clique em '$1' falhou"; return; }; ab mouse up left >/dev/null 2>&1 || aviso "clique em '$1' falhou"; }
+apontar_conteudo() { exigir_entrada_iniciada; local xy; xy="$(centro "$1")"; if [ -z "$xy" ]; then aviso "texto '$1' não encontrado para apontar"; return; fi; ab mouse move $xy >/dev/null; }
+aria_centro() { local seletor; seletor="$(js "$1")"; ab eval "(()=>{const t=$seletor;const e=[...document.querySelectorAll('[aria-label]')].find(x=>(x.getAttribute('aria-label')||'').startsWith(t)&&x.getClientRects().length);if(!e)return '';const r=e.getBoundingClientRect();return Math.round(r.x+r.width/2)+' '+Math.round(r.y+r.height/2)})()" 2>/dev/null | tr -d '"'; }
+apontar_aria() { exigir_entrada_iniciada; local xy; xy="$(aria_centro "$1")"; if [ -z "$xy" ]; then aviso "aria-label '$1' não encontrado"; return; fi; ab mouse move $xy >/dev/null; }
+preencher_aria() { exigir_entrada_iniciada; local seletor xy focou; seletor="$(js "$1")"; xy="$(aria_centro "$1")"; if [ -z "$xy" ]; then aviso "aria-label '$1' não encontrado"; return; fi; ab mouse move $xy >/dev/null; sleep 0.5; focou="$(ab eval "(()=>{const t=$seletor;const e=[...document.querySelectorAll('[aria-label]')].find(x=>(x.getAttribute('aria-label')||'').startsWith(t)&&x.getClientRects().length);if(!e)return false;getSelection()?.removeAllRanges();e.focus();e.click();return document.activeElement===e})()" 2>/dev/null)"; [ "$focou" = "true" ] || { aviso "foco em '$1' falhou"; return; }; ab press Control+a >/dev/null 2>&1 || aviso "seleção de '$1' falhou"; ab keyboard type "$2" >/dev/null 2>&1 || aviso "digitação em '$1' falhou"; ab press Tab >/dev/null 2>&1 || aviso "saída de '$1' falhou"; }
+direito_texto() { exigir_entrada_iniciada; local xy; xy="$(centro "$1")"; if [ -z "$xy" ]; then aviso "texto '$1' não encontrado para botão direito"; return; fi; ab mouse move $xy >/dev/null; sleep 0.7; ab mouse down right >/dev/null 2>&1; ab mouse up right >/dev/null 2>&1; }
+direito_aria() { exigir_entrada_iniciada; local xy; xy="$(aria_centro "$1")"; if [ -z "$xy" ]; then aviso "aria-label '$1' não encontrado para botão direito"; return; fi; ab mouse move $xy >/dev/null; sleep 0.7; ab mouse down right >/dev/null 2>&1; ab mouse up right >/dev/null 2>&1; }
+clique_texto() { apontar "$1"; sleep 0.7; ab find text "$1" click >/dev/null 2>&1 || aviso "clique em texto '$1' não encontrado"; }
+campo() { exigir_entrada_iniciada; ab find placeholder "$1" hover >/dev/null 2>&1 || aviso "campo '$1' não encontrado"; }
+tecla() { exigir_entrada_iniciada; ab press "$1" >/dev/null 2>&1 || aviso "tecla $1 falhou"; }
+espera() { sleep "$(python3 -c "print($1/1000)")"; }
+
+roteiro
+[ "$entrada_iniciada" -eq 1 ] || { echo "roteiro inválido: entrar_destino '$ENTRADA_DESTINO' não foi executado" >&2; exit 1; }
+if [ "$ENTRADA_TIPO" = "menu" ]; then
+  estado_final="$(estado_entrada)"
+  [ "$estado_final" = "true" ] || { echo "navegação inválida: o item '$ENTRADA_DESTINO' não terminou selecionado (estado $estado_final)" >&2; exit 1; }
+fi
+sleep 1.5
+resultado="$(ab eval "window.__mascaraAplicar(); window.__mascaraVerificar()")"
+validar_mascara "$resultado"
+parar_gravacao
+ab close >/dev/null 2>&1 || true
+browser_aberto=0
+}
+
+if [ "$modo" != --compor ]; then
+  executar_captura
+  if [ "$modo" = --preparar ]; then exit 0; fi
+fi
+etapa=validação
+acao='decodificação da tomada'
+# Conferir duração e decodificação da tomada antes de compor o resultado.
+ffmpeg -v error -xerror -i "$tmp/demo.mp4" -f null -
+dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$tmp/demo.mp4")"
+python3 - "$dur" <<'PYDUR'
+import math, sys
+value = float(sys.argv[1])
+if not math.isfinite(value) or value <= 0:
+    raise SystemExit('gravação sem duração válida')
+PYDUR
+
+echo "demonstração: ${dur}s"
+if [ "$modo" != --compor ]; then
+  [ "$(python3 "$skill/video_artifacts.py" signature capture "$raiz" "$skill" "$slug")" = "$assinatura" ] || {
+    echo 'entrada, roteiro ou configuração mudou durante a captura; capture novamente' >&2; exit 1;
+  }
+  python3 "$skill/video_artifacts.py" save "$tmp" "$assinatura" demo.mp4
+fi
+if [ "$modo" = --capturar ]; then
+  echo "tomada validada: $tmp; para compor: aura-novidades-video $slug --compor $tmp"
+  exit 0
+fi
+
+etapa=composição
+acao='vinhetas validadas'
+python3 "$skill/video_artifacts.py" vinheta "$raiz" "$skill" "$slug" "$tmp/vinheta"
+acao='áudio, capa e vídeo final'
+# ---- composição: abertura · demonstração · encerramento
+ab_dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$tmp/vinheta/abertura.mp4")"
+en_dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$tmp/vinheta/encerramento.mp4")"
+audio_in=(); audio_map=()
+# ---- som: logo sonoro só sob as vinhetas; trilha só sob a demonstração (nunca se sobrepõem)
+#   trilha (novidades/vinheta.json → som.trilha, som.volumeTrilha): em loop, entra 0,5 s depois da
+#   abertura com fade-in de 1 s e sai com fade-out de 1,5 s antes do encerramento
+eval "$(python3 - "$nov/vinheta.json" <<'EOF'
+import json,sys,shlex
+s=json.load(open(sys.argv[1],encoding='utf-8')).get('som',{})
+print('TRILHA='+shlex.quote(s.get('trilha') or '')); print('VOL_TRILHA='+shlex.quote(str(s.get('volumeTrilha',0.3))))
+EOF
+)"
+total_s="$(python3 -c "print(round($ab_dur+$dur+$en_dur,3))")"
+python3 - "$total_s" <<'EOF'
+import sys
+duracao = float(sys.argv[1])
+if duracao > 45:
+    raise SystemExit(f'vídeo longo demais: {duracao:.2f}s; máximo 45s incluindo as vinhetas')
+EOF
+ins=(); fc=""; mix=()
+if [ -f "$tmp/vinheta/logo-sonoro.wav" ]; then
+  # 0,2 s após o início da abertura e do encerramento (quando o primeiro ponto chega)
+  enc_ms="$(python3 -c "print(int(($ab_dur+$dur+0.2)*1000))")"
+  ins+=(-i "$tmp/vinheta/logo-sonoro.wav" -i "$tmp/vinheta/logo-sonoro.wav")
+  fc+="[0:a]adelay=200|200[l1];[1:a]adelay=${enc_ms}|${enc_ms}[l2];"; mix+=("[l1]" "[l2]")
+fi
+if [ -n "$TRILHA" ]; then
+  [ -f "$nov/$TRILHA" ] || { echo "trilha não encontrada: $nov/$TRILHA (som.trilha em vinheta.json)" >&2; exit 1; }
+  [ -f "$nov/som/LICENCA.md" ] || { echo "som/LICENCA.md ausente: registre a licença da trilha antes de usá-la" >&2; exit 1; }
+  ini="$(python3 -c "print(round($ab_dur+0.5,3))")"; fim_t="$(python3 -c "print(round($ab_dur+$dur,3))")"
+  dur_t="$(python3 -c "print(round($fim_t-$ini,3))")"; fade_out="$(python3 -c "print(round($dur_t-1.5,3))")"
+  ins+=(-stream_loop -1 -i "$nov/$TRILHA"); n="${#mix[@]}"
+  fc+="[$n:a]atrim=duration=$dur_t,afade=t=in:d=1,afade=t=out:st=$fade_out:d=1.5,volume=$VOL_TRILHA,adelay=$(python3 -c "print(int($ini*1000))")|$(python3 -c "print(int($ini*1000))")[t];"; mix+=("[t]")
+fi
+if [ "${#mix[@]}" -gt 0 ]; then
+  ffmpeg -v error -y "${ins[@]}" -filter_complex "${fc}$(printf '%s' "${mix[@]}")amix=inputs=${#mix[@]}:normalize=0,apad[a]" -map "[a]" -t "$total_s" "$tmp/audio.wav"
+  audio_in=(-i "$tmp/audio.wav"); audio_map=(-map 3:a -c:a aac -b:a 128k)
+fi
+saida_render="$tmp/$slug.mp4"
+capa_render="$tmp/$slug-capa.png"
+ffmpeg -v error -y \
+  -i "$tmp/vinheta/abertura.mp4" \
+  -i "$tmp/demo.mp4" \
+  -i "$tmp/vinheta/encerramento.mp4" \
+  "${audio_in[@]}" \
+  -filter_complex "\
+[0:v]fps=30,format=yuv420p,setpts=PTS-STARTPTS[a];\
+[1:v]scale=$OUT_W:$OUT_H:flags=lanczos,fps=30,format=yuv420p,fade=t=in:st=0:d=0.3,fade=t=out:st=$(python3 -c "print(max(0,$dur-0.4))"):d=0.4,setpts=PTS-STARTPTS[m];\
+[2:v]fps=30,format=yuv420p,setpts=PTS-STARTPTS[e];\
+[a][m][e]concat=n=3:v=1:a=0[v]" \
+  -map "[v]" "${audio_map[@]}" -shortest -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -movflags +faststart "$saida_render"
+# Capa extraída da demonstração na resolução final.
+ffmpeg -v error -y -ss 1.5 -i "$tmp/demo.mp4" -vf "scale=$OUT_W:$OUT_H:flags=lanczos" -frames:v 1 "$capa_render"
+video_info="$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height -of csv=p=0 "$saida_render")"
+[ "$video_info" = "h264,$OUT_W,$OUT_H" ] || { echo "vídeo final inválido: $video_info" >&2; exit 1; }
+ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$capa_render" | grep -qx png || { echo "capa final inválida" >&2; exit 1; }
+# Validar áudio, dimensões e duração efetiva da composição, antes de publicar arquivos.
+[ "$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$saida_render")" = aac ] || { echo "áudio AAC ausente" >&2; exit 1; }
+[ "$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$capa_render")" = "$OUT_W,$OUT_H" ] || { echo "dimensões da capa inválidas" >&2; exit 1; }
+ffmpeg -v error -xerror -i "$saida_render" -f null -
+python3 - "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$saida_render")" <<'PYFINAL'
+import math, sys
+value = float(sys.argv[1])
+if not math.isfinite(value) or not 0 < value <= 45:
+    raise SystemExit('duração final fora do limite de 45 segundos')
+PYFINAL
+# 20 amostras distribuídas pelo vídeo completo: inclui a vinheta final mesmo perto do limite de 45 s.
+ffmpeg -v error -y -i "$saida_render" -vf "fps=20/$total_s,scale=360:-1,tile=5x4" -frames:v 1 "$tmp/folha.jpg"
+ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$tmp/folha.jpg" | grep -qx mjpeg || { echo "folha de contato inválida" >&2; exit 1; }
+saida_tmp="$nov/entradas/video/.$slug.tmp.mp4"
+capa_tmp="$nov/entradas/video/.$slug-capa.tmp.png"
+cp "$saida_render" "$saida_tmp"
+cp "$capa_render" "$capa_tmp"
+mv -f "$saida_tmp" "$saida"
+mv -f "$capa_tmp" "$capa"
+ffprobe -v error -show_entries format=duration,size:stream=width,height,codec_name -of default=noprint_wrappers=1 "$saida" | tr '\n' ' '; echo
+echo "vídeo: $saida"; echo "capa: $capa"; echo "revisão: $tmp/folha.jpg"
+echo "tomada, composição e revisão preservadas em $tmp"
