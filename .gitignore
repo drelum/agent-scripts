@@ -2,3 +2,23 @@
 /.state/
 __pycache__/
 *.py[cod]
+
+# Artefatos locais, perfis autenticados e saídas de execução.
+/output/
+/browser-profiles/
+/tmp/
+/parking/
+/sop-ean-validation.*/
+/bin/*.backup
+/*.log
+
+# Experimentos e relatórios locais preservados fora do versionamento.
+/aitrus-incentivo-smartped.html
+/beta-106-*.txt
+/beta106-drawer-*.txt
+/brick-molecule-claude-opinion.md
+/brick-molecule-opinion-brief.txt
+/herdr-resume-current.py
+/herdr-resume-five.json
+/herdr-resume-rest.json
+/openwa-listen-new-messages.mjs
