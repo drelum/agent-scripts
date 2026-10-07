@@ -73,7 +73,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fast",
         action="store_true",
-        help="Use Codex Fast service tier; valid only with --engine codex.",
+        default=None,
+        help="Use Codex Fast service tier (enabled by default for Codex; retained for compatibility).",
     )
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--max-bundle-kb", type=int, default=DEFAULT_MAX_BUNDLE_KB)
@@ -89,6 +90,7 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.fast and args.engine != "codex":
         parser.error("--fast is valid only with --engine codex")
+    args.fast = args.engine == "codex"
     if args.accepted_finding and not args.follow_up:
         parser.error("--accepted-finding requires --follow-up")
     return args

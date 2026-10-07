@@ -33,7 +33,7 @@ from visual_inspection_lib.runtime import (
     ActiveVisualInspection,
     acquire_run_lock,
     create_run,
-    open_evidence_directory,
+    evidence_directory_link,
     resolve_repository,
     validate_url,
 )
@@ -68,12 +68,6 @@ def execution_value(markdown: str, label: str) -> str:
 
 class VisualInspectionCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.auto_open = patch.dict(
-            os.environ,
-            {"VISUAL_INSPECTION_AUTO_OPEN": "0"},
-        )
-        self.auto_open.start()
-        self.addCleanup(self.auto_open.stop)
         self.temp = tempfile.TemporaryDirectory(prefix="visual-inspection-test-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -235,59 +229,49 @@ output.write_text(json.dumps({'before': before, 'after': after, 'deadline': dead
             session, _ = create_run(self.root / "local-time")
         self.assertTrue(session.startswith("visual-20260713-235958-"))
 
-    def test_evidence_directory_opens_in_windows_explorer_on_wsl(self) -> None:
+    def test_evidence_link_converts_wsl_path_without_opening_explorer(self) -> None:
         evidence_dir = self.root / "evidence with spaces"
         evidence_dir.mkdir()
-        completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-        converted = subprocess.CompletedProcess(
-            [],
-            0,
-            stdout=r"\\wsl.localhost\Ubuntu\tmp\evidence with spaces" + "\n",
-            stderr="",
-        )
-
+        windows_path = r"\\wsl.localhost\Ubuntu\tmp\evidence with spaces"
+        converted = subprocess.CompletedProcess([], 0, stdout=windows_path + "\n")
         with (
-            patch.dict(
-                os.environ,
-                {
-                    "VISUAL_INSPECTION_AUTO_OPEN": "1",
-                    "WSL_DISTRO_NAME": "Ubuntu",
-                },
-            ),
-            patch(
-                "visual_inspection_lib.runtime.shutil.which",
-                side_effect=lambda command: {
-                    "wslpath": "/usr/bin/wslpath",
-                    "cmd.exe": "/mnt/c/Windows/System32/cmd.exe",
-                }.get(command),
-            ),
-            patch(
-                "visual_inspection_lib.runtime.subprocess.run",
-                side_effect=[converted, completed],
-            ) as run,
+            patch.dict(os.environ, {"WSL_DISTRO_NAME": "Ubuntu", "VISUAL_INSPECTION_AUTO_OPEN": "1"}),
+            patch("visual_inspection_lib.runtime.shutil.which", return_value="/usr/bin/wslpath"),
+            patch("visual_inspection_lib.runtime.subprocess.run", return_value=converted) as run,
         ):
-            self.assertTrue(open_evidence_directory(evidence_dir))
+            self.assertEqual(
+                evidence_directory_link(evidence_dir),
+                f"`{windows_path}`\nfile://wsl.localhost/Ubuntu/tmp/evidence%20with%20spaces\n",
+            )
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0], ["/usr/bin/wslpath", "-w", str(evidence_dir)])
 
-        self.assertEqual(
-            run.call_args_list[1].args[0],
-            [
-                "/mnt/c/Windows/System32/cmd.exe",
-                "/d",
-                "/c",
-                "start",
-                "",
-                r"\\wsl.localhost\Ubuntu\tmp\evidence with spaces",
-            ],
-        )
-
-    def test_evidence_directory_auto_open_can_be_disabled(self) -> None:
-        evidence_dir = self.root / "evidence"
-        evidence_dir.mkdir()
+    def test_evidence_link_supports_windows_drive(self) -> None:
+        converted = subprocess.CompletedProcess([], 0, stdout="C:\\Evidence with spaces\n")
         with (
-            patch.dict(os.environ, {"VISUAL_INSPECTION_AUTO_OPEN": "0"}),
+            patch.dict(os.environ, {"WSL_DISTRO_NAME": "Ubuntu"}),
+            patch("visual_inspection_lib.runtime.shutil.which", return_value="wslpath"),
+            patch("visual_inspection_lib.runtime.subprocess.run", return_value=converted),
+        ):
+            self.assertEqual(evidence_directory_link(self.root),
+                             "`C:\\Evidence with spaces`\nfile:///C:/Evidence%20with%20spaces\n")
+
+    def test_evidence_link_falls_back_when_conversion_fails(self) -> None:
+        with (
+            patch.dict(os.environ, {"WSL_DISTRO_NAME": "Ubuntu"}),
+            patch("visual_inspection_lib.runtime.shutil.which", return_value="wslpath"),
+            patch("visual_inspection_lib.runtime.subprocess.run", side_effect=OSError),
+        ):
+            self.assertEqual(evidence_directory_link(self.root),
+                             f"`{self.root}`\n{self.root.as_uri()}\n")
+
+    def test_evidence_link_without_wsl_does_not_run_commands(self) -> None:
+        with (
+            patch.dict(os.environ, {}, clear=True),
             patch("visual_inspection_lib.runtime.subprocess.run") as run,
         ):
-            self.assertFalse(open_evidence_directory(evidence_dir))
+            self.assertEqual(evidence_directory_link(self.root),
+                             f"`{self.root}`\n{self.root.as_uri()}\n")
         run.assert_not_called()
 
     def hold_all_run_slots(self, root: Path) -> list:

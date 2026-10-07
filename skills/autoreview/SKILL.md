@@ -19,7 +19,7 @@ Resolve `<skill-dir>` as the directory containing this `SKILL.md`, regardless of
 <skill-dir>/scripts/autoreview --engine claude
 ```
 
-Before invoking from Codex, preserve the calling client's tier: use explicit session/status metadata when available; otherwise read the persisted `service_tier` selected by `/fast` in the active Codex config. Pass `--fast` when that value is `fast`, or when the user explicitly requests Fast. Omit it when Fast is disabled or cannot be established. From Claude, omit it unless the user explicitly requests a Codex Fast review. The flag preserves `gpt-6.1-sol` and reasoning `high`; it changes only the Codex service tier.
+Fast is enabled by default for Codex reviews, independently of the calling client or its config. No flag is required; `--fast` remains accepted for compatibility and is valid only with `--engine codex`. This preserves `gpt-6.1-sol` and reasoning `high`. Claude reviews use their existing CLI defaults.
 
 Default `--mode auto` behavior:
 
@@ -78,7 +78,7 @@ Explicit targets:
 
 - Codex: ephemeral execution in the native read-only sandbox, with repository and EVE snapshot readable, empty tool-shell environment, project instructions disabled, user config and exec rules ignored; web search is enabled only for an Eve review without a local EVE snapshot.
 - Codex default reviewer: `gpt-6.1-sol` with reasoning effort `high`; an explicit `--model` overrides the model.
-- Codex Fast: optional `--fast` enables the CLI Fast feature and selects `service_tier="fast"`. Repass the calling client's known or persisted Fast selection because the helper intentionally ignores user config.
+- Codex Fast: enabled by default through `fast_mode` and `service_tier="fast"`, independently of caller settings. `--fast` remains accepted for compatibility.
 - Claude: print mode, safe mode, user setting source only, checkout- and EVE-snapshot-scoped reads without secret-path denials; `WebFetch` is restricted to `eve.dev` only for an Eve review without a snapshot; shell, writes, open web search, and MCP remain disabled.
 - The review bundle and repository reads may contain secrets. Ambient process credentials remain excluded from the reviewer environment.
 - Do not run reviewer panels or another engine unless the user asks.

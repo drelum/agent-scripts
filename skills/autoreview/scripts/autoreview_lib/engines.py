@@ -356,7 +356,7 @@ def codex_command(
     schema_file: Path,
     output_file: Path,
     model: str | None,
-    fast: bool = False,
+    fast: bool = True,
     additional_read_path: Path | None = None,
     eve_web_fallback: bool = True,
 ) -> list[str]:
@@ -451,7 +451,7 @@ def run_engine(
     prompt: str,
     model: str | None,
     *,
-    fast: bool = False,
+    fast: bool = True,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
     stream_engine_output: bool = False,
@@ -502,7 +502,7 @@ def command_preview(
     engine: str,
     repo: Path,
     model: str | None,
-    fast: bool = False,
+    fast: bool = True,
     additional_read_path: Path | None = None,
     eve_web_fallback: bool = True,
 ) -> dict[str, Any]:

@@ -381,6 +381,21 @@ class RepositoryCase(unittest.TestCase):
                 build_bundle(self.repo, "local", None, "HEAD", 100_000, max_file_bytes=100)
 
 
+    def test_cli_enables_fast_by_default_only_for_codex(self) -> None:
+        (self.repo / "app.txt").write_text("after\n", encoding="utf-8")
+        script = Path(__file__).with_name("autoreview")
+        for engine in ("codex", "claude"):
+            with self.subTest(engine=engine):
+                result = subprocess.run(
+                    [str(script), "--repo", str(self.repo), "--mode", "local",
+                     "--engine", engine, "--dry-run"],
+                    text=True, capture_output=True, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual("fast_mode" in result.stdout, engine == "codex")
+                self.assertEqual('service_tier="fast"' in result.stdout, engine == "codex")
+
+
 class EveDocsCase(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="autoreview-eve-docs-")
@@ -835,10 +850,10 @@ class EngineAndReportCase(unittest.TestCase):
         self.assertEqual(command[command.index("--model") + 1], "gpt-5.5")
         self.assertIn('model_reasoning_effort="high"', command)
 
-    def test_codex_fast_is_explicit_and_keeps_sol_high(self) -> None:
-        standard = codex_command(Path("/repo"), Path("schema.json"), Path("result.json"), None)
-        fast = codex_command(
-            Path("/repo"), Path("schema.json"), Path("result.json"), None, fast=True
+    def test_codex_fast_is_default_and_keeps_sol_high(self) -> None:
+        fast = codex_command(Path("/repo"), Path("schema.json"), Path("result.json"), None)
+        standard = codex_command(
+            Path("/repo"), Path("schema.json"), Path("result.json"), None, fast=False
         )
         self.assertNotIn("fast_mode", standard)
         self.assertNotIn('service_tier="fast"', standard)

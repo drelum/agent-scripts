@@ -40,7 +40,7 @@ from visual_inspection_lib.runtime import (
     acquire_run_lock,
     create_run,
     discover_preserved_artifacts,
-    open_evidence_directory,
+    evidence_directory_link,
     resolve_repository,
     validate_url,
 )
@@ -200,12 +200,9 @@ def main() -> int:
                 "Relatório": f"`{report_file}`",
             }
             rendered = render_report(report, execution=execution)
+            rendered += "\n# Pasta de evidências\n\n" + evidence_directory_link(evidence_dir)
             report_file.write_text(rendered, encoding="utf-8")
             print(rendered, end="")
-            if open_evidence_directory(evidence_dir):
-                progress(
-                    f"opened evidence directory in Windows Explorer; evidence_dir={evidence_dir}"
-                )
             progress(f"blocked by inspection capacity; evidence_dir={evidence_dir}")
             return 0
         progress(
@@ -350,12 +347,9 @@ def main() -> int:
             else render_report(report, execution=execution)
         )
         rendered = append_progress(rendered, evidence_dir)
+        rendered += "\n# Pasta de evidências\n\n" + evidence_directory_link(evidence_dir)
         report_file.write_text(rendered, encoding="utf-8")
         print(rendered, end="")
-        if open_evidence_directory(evidence_dir):
-            progress(
-                f"opened evidence directory in Windows Explorer; evidence_dir={evidence_dir}"
-            )
         progress(
             f"completed; status={assessment.status if assessment else report['status']}; duration={duration_seconds:.3f}s"
         )

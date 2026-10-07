@@ -8,7 +8,7 @@ import stat
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import TextIO
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -26,7 +26,6 @@ OPERATIONAL_FILES = {
     "draft-report.md",
 }
 SAO_PAULO = ZoneInfo("America/Sao_Paulo")
-AUTO_OPEN_DISABLED_VALUES = {"0", "false", "no", "off"}
 MAX_CONCURRENT_INSPECTIONS = 3
 LOCK_SCAN_ATTEMPTS = 2
 
@@ -137,47 +136,26 @@ def _open_lock(root: Path, name: str) -> TextIO:
         os.close(root_fd)
 
 
-def open_evidence_directory(evidence_dir: Path) -> bool:
-    if (
-        os.environ.get("VISUAL_INSPECTION_AUTO_OPEN", "1").strip().lower()
-        in AUTO_OPEN_DISABLED_VALUES
-    ):
-        return False
-    if not (os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP")):
-        return False
-
+def evidence_directory_link(evidence_dir: Path) -> str:
     resolved = evidence_dir.resolve()
-    if not resolved.is_dir():
-        return False
     wslpath = shutil.which("wslpath")
-    cmd = shutil.which("cmd.exe")
-    windows_cwd = Path("/mnt/c")
-    if not wslpath or not cmd or not windows_cwd.is_dir():
-        return False
-
-    try:
-        converted = subprocess.run(
-            [wslpath, "-w", str(resolved)],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=5,
-        )
-        windows_path = converted.stdout.strip()
-        if converted.returncode != 0 or not windows_path:
-            return False
-        opened = subprocess.run(
-            [cmd, "/d", "/c", "start", "", windows_path],
-            cwd=windows_cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=5,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return opened.returncode == 0
+    if wslpath and (os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP")):
+        try:
+            converted = subprocess.run(
+                [wslpath, "-w", str(resolved)],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=5,
+            )
+            windows_path = converted.stdout.strip()
+            if converted.returncode == 0 and windows_path:
+                uri = PureWindowsPath(windows_path).as_uri()
+                return f"`{windows_path}`\n{uri}\n"
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            pass
+    return f"`{resolved}`\n{resolved.as_uri()}\n"
 
 
 def acquire_run_lock(root: Path, session: str, repository: Path) -> RunLock:
