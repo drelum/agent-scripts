@@ -1,6 +1,6 @@
 ---
 name: aura-posthog
-description: Analisar o uso do Aura no PostHog (projeto 331102), com foco em navegação, itens no carrinho, envio de pedido e erros. Usar para jornada de um usuário, funil do carrinho ao envio, erros no carrinho ou no envio, perfis de navegação, origem das sessões e cruzamento com pedidos do ClickHouse. Descobre eventos e propriedades a cada uso, porque a instrumentação muda.
+description: Analisar eventos, jornadas e erros do Aura no PostHog; acessar e baixar sessões gravadas, reconstruir a reprodução local e capturar frames no instante relevante. Usar para entender o que ocorreu numa sessão, investigar bloqueios no carrinho/checkout, comparar antes/depois de uma falha ou correlacionar a jornada com pedidos no ClickHouse. Descobrir eventos e propriedades a cada uso.
 ---
 
 # Aura PostHog
@@ -9,7 +9,7 @@ Análise de comportamento no Aura via PostHog, somente leitura. Eventos e propri
 **descobrir primeiro, consultar depois**. O que está em `references/` é conhecimento datado, não contrato.
 
 ```bash
-ph=/home/drelu/Projects/agent-scripts/skills/aura-posthog/scripts/aura-posthog
+ph=<skill>/scripts/aura-posthog   # <skill> = pasta deste SKILL.md
 ```
 
 ## Antes de começar
@@ -50,6 +50,19 @@ Ler `references/playbooks.md` e escolher pelo tipo de pergunta. Cada roteiro diz
 
 Para detalhes de HogQL (funções que não existem, teto de 500 linhas, paginação por chave, tabela `sessions`,
 gravações), ler `references/hogql.md` antes de montar consultas não triviais.
+
+## Gravações
+
+| Objetivo | Caminho | Referência |
+|---|---|---|
+| Investigar um erro com sessão e horário | `scripts/replay_lab.py <sessão> --at <horário>`: baixa em lotes para cache e monta o laboratório (`window.lab`) para `agent-browser` | `references/replay-lab.md` |
+| Acesso, login, localizar sessões | `posthog-cli api` (metadados) | `references/replay-download.md` |
+| Sessões inteiras para amostra de jornadas | `scripts/replay_download.py` + `scripts/replay_evidence.py analyze` | `references/replay-download.md`, `references/replay-analysis.md` |
+
+O download usa a API de snapshots, ausente no catálogo do CLI verificado; essa exceção GET é explícita, não
+fallback silencioso. Na investigação de replays históricos, o agente usa a CLI global `agent-browser`
+diretamente, em sessão própria com prefixo `replay-`, sem exigir `visual-inspection`; fecha somente essa sessão.
+Sem conferência das imagens, declarar a análise como estrutural.
 
 ## Relatar
 

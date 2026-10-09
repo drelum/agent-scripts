@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aura Incident Investigation"
+  short_description: "Triagem de incidentes do Aura com logs, PostHog, gravações e dados"
+  default_prompt: "Use $aura-incident-investigation para investigar erros recentes do Aura, identificar usuários, lojas e pedidos afetados e reconstruir as gravações no instante da falha."

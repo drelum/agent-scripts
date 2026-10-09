@@ -13,7 +13,12 @@ Verificado em 23/09/2026, janela de 30 dias. **Conhecimento datado:** reconfirme
 ## Identidade
 
 - `distinct_id` = ID numérico do usuário no Aura; `$user_id` presente em ~99% dos eventos.
-- Pessoas do PostHog **não** têm e-mail confiável. Resolver e-mail → ID em `aura.user` (ClickHouse).
+- Desde 07/10/2026 00:19 BRT (aura-ui `5b026ab`, story 11-2-2) a pessoa recebe `email`, `name`, `access_level`
+  (`GLOBAL|CHAIN|ECONOMIC_GROUP|STORE`), `chain_name`/`chain_slug`, `economic_group_*` e traits de loja
+  (`active_store_count`, `erp_types`, `store_states`; não para acesso global); o grupo `chain` tem `name`/`slug`.
+  Só para quem logou depois do deploy: para histórico, resolver e-mail → ID em `aura.user` (ClickHouse).
+- Sessão de browser automatizado (agent-browser headless) **não gera eventos**: o filtro de bots do posthog-js
+  descarta o user-agent headless. Verificar instrumentação com tráfego real ou browser com UA normal.
 - Eventos anônimos: páginas antes do login (`/login`), ~1% do volume.
 
 ## Contexto global (em todo evento próprio do Aura)
@@ -26,9 +31,13 @@ Verificado em 23/09/2026, janela de 30 dias. **Conhecimento datado:** reconfirme
 | `has_global_access`, `is_internal` | Acesso global; interno (cobre poucas pessoas) |
 | `experiment_offers_as_home` | Super-propriedade antiga; a flag `offers-as-home` parou de ser avaliada em 09/09/2026 — não usar como variante atual |
 
-Contexto enriquecido (parcial, desde agosto/2026): `app_surface`, `app_environment`, `user_id`, `user_email`,
+Contexto legado (06/10/2026): `app_surface`, `app_environment`, `user_id`, `user_email`,
 `user_name`, `user_profile`, `store_id`, `store_cnpj`, `store_cnpj_root`, `store_name`, `store_state`,
-`aura_store_id`. Contém dados pessoais: não expor e-mail/nome sem necessidade.
+`aura_store_id`. **Não é instrumentação do aura-ui**: são super-propriedades do `aura-web-app`
+(`posthogClient.ts`, descontinuado) que ficaram no `localStorage` de quem nunca fez logout; o aura-ui não as
+remove. Em 30 dias, só 10 pessoas. Contém dados pessoais: não expor e-mail/nome sem necessidade.
+Person property `email`/`name`: 68 de 486 pessoas, gravadas pelo `identify` do `aura-web-app` (último em maio/2026);
+o aura-ui identifica só com `userId` e traits sem PII.
 
 ## Eventos por módulo (prefixo)
 
@@ -95,6 +104,10 @@ Validação (08–21/09/2026): `cart_checkout_succeeded` = 976 contra 910 carrin
   logo o caminho `route_error_boundary` ainda não foi exercitado em produção. Contexto enriquecido (`app_surface`,
   `store_id`...) **não** vem do Aura UI de produção (sem código em `aura-ui`); cobertura segue ~2,5%.
 - Deploy do Aura UI: produção sai da branch `prod` (PR `main → prod`); merge na `main` não publica.
+- Verificação 08/10/2026: `assortment_load_failed` novo (1º visto 08/10, Mix `/product-assortment`), com `reason`,
+  `http_status`, `mode` (ex.: `PER_STORE`). `cart_item_add_failed` com `network_error` vem sem `http_status`
+  nem `error_message`. `cart_checkout_failed` 500 emite `$exception` pareado no mesmo ms. A causa do 500
+  não chega ao PostHog (`error_message` = `HTTP 500`): cruzar com Cloud Run `aura` (`aitrus-aura-prod`, severity ERROR).
 
 ## Sessões e origem
 

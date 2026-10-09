@@ -1,0 +1,17 @@
+{
+  "gcp": {
+    "secret_project": "aitrus-shared-prod",
+    "log_projects": ["aitrus-aura-prod", "aitrus-data-prod", "aitrus-sync-prod"]
+  },
+  "clickhouse": {
+    "url": "https://zqq2jv4ux5.us-central1.gcp.clickhouse.cloud:8443/",
+    "user": "agent_read",
+    "password_secret": "clickhouse-agent-read-password"
+  },
+  "mysql": {
+    "instance": "aitrus-shared-prod:us-central1:shared",
+    "service_account": "agent-read@aitrus-shared-prod.iam.gserviceaccount.com",
+    "user": "agent-read"
+  },
+  "posthog": {"host": "https://us.posthog.com", "project_id": 331102}
+}

@@ -1,0 +1,2 @@
+# Opcional: somente para MySQL. PyPI: release 17/09/2026; Python >=3.9.
+PyMySQL==1.2.3
