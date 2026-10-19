@@ -114,3 +114,18 @@ Validação (08–21/09/2026): `cart_checkout_succeeded` = 976 contra 910 carrin
 - ~80% das sessões vêm de portais: `app.otimizafarma.com.br` (vários destinos) e `super-app.grupohipersaude.com.br`
   (100% para `/offers`), via `/login?token=…&redirect_uri=…`.
 - Home padrão sem `redirect_uri`: `/mix-produto` (Aura UI; conferir código se a pergunta depender disso).
+
+## Campanhas (`utm_*`) — produção desde 17/10/2026; modelo revisto em 18/10/2026 (aura-ui #822/#824, aura #1392)
+
+- **Visita × 7 dias:** os `utm_*` padrão valem só para a visita da campanha (PostHog na carga e
+  `register_for_session` em navegação interna). A janela de 7 dias para carrinho e pedido é
+  `attribution_utm_*` + `attribution_registered_at`. Entre 17/10 e 18/10/2026 os `utm_*` padrão iam por
+  7 dias com `utm_registered_at`, e as sessões seguintes dessa época saem como sessões de campanha.
+- **Sessão:** `$entry_utm_*` e `$channel_type` vêm do primeiro `$pageview` da sessão
+  (`raw_sessions/sessions_v3.py`). A sessão vale para todas as abas, com 30 min de inatividade. O 302 do
+  link curto vai para `/l/{código}?utm_…` desde 18/10/2026; antes, todo clique saía "Direct".
+- **Canais próprios** (projeto 331102, `modifiers.customChannelTypeRules`, desde 18/10/2026, valem
+  também para o histórico): `CRM e-mail`, `CRM SMS` e `CRM` (`utm_source=crm`).
+- **Perfil:** `first_utm_*` (`$set_once`, primeira campanha), `utm_*` nativo (última) e `$initial_utm_*`
+  nativo (primeiro acesso, com ou sem campanha). `last_utm_*` só existiu em 17/10/2026.
+- Workers de QA (HeadlessChrome) não geram eventos (filtro de robôs): a conferência exige clique real.
