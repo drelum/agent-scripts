@@ -10,7 +10,7 @@
 //   2. qualquer CNPJ, formatado ou só dígitos, por expressão regular;
 //   3. atributos visíveis (title, placeholder, aria-label, value de inputs).
 (() => {
-  // Substituições explícitas: loja/grupo/usuário do ambiente Beta local. Acrescente novos pares
+  // Substituições explícitas: loja/grupo/usuário usados nas gravações. Acrescente novos pares
   // quando capturar em outro contexto; a ordem importa (cadeias mais longas primeiro).
   const ALVOS = [
     ['Drogarias Da Vovo', 'Farmácia Modelo'],
@@ -28,7 +28,7 @@
   // variações da loja de testes que não batem por cadeia exata (singular, maiúsculas, acento)
   const LOJA_REGEX = /drogarias?\s+da\s+vov[oó]/gi;
   const GRUPO_REGEX = /genivaldo\s+oliveira(?:\s*\(sabara\s+mg\))?/gi;
-  // Outras redes usadas em demonstrações (Itufarma: caso real de EAN irmão, BETA-158).
+  // Outras redes usadas em demonstrações (Itufarma: caso real de EAN irmão).
   const OUTRAS = [
     [/itufarma\s+drogaria\s+ltda/gi, 'Farmácia Modelo Ltda'],
     [/itufarma/gi, 'Farmácia Modelo'],
@@ -48,6 +48,41 @@
         'gu',
       )
     : null;
+  // Terceiros (manual de marca, #imagem): distribuidoras e plataformas de integração, de
+  // terceiros.json (aura-novidades-terceiros), injetado como window.__MASCARA_TERCEIROS. Cada nome
+  // vira "Distribuidora A", "B"…, na ordem em que aparece, estável na sessão (sobrevive a recargas).
+  const TERCEIROS = window.__MASCARA_TERCEIROS || null;
+  const UFS = 'AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO';
+  const alternativas = (nomes) =>
+    [...nomes].sort((a, b) => b.length - a.length).map((n) => escapar(n).replace(/ /g, '\\s+')).join('|');
+  const TERCEIRO_UF = TERCEIROS
+    ? new RegExp(`(?<![\\p{L}\\d])(?:${alternativas(TERCEIROS.com_uf)})(?=\\s*[-–]\\s*(?:${UFS})(?![\\p{L}\\d]))`, 'giu')
+    : null;
+  const TERCEIRO_SOZINHO = TERCEIROS ? new RegExp(`(?<![\\p{L}\\d])(?:${alternativas(TERCEIROS.sozinho)})(?![\\p{L}\\d])`, 'giu') : null;
+  const TERCEIRO_EXATO = new Set((TERCEIROS?.exato ?? []).map((n) => n.toUpperCase()));
+  const PLATAFORMA = TERCEIROS ? new RegExp(`(?<![\\p{L}\\d])(?:${alternativas(TERCEIROS.plataformas)})(?![\\p{L}\\d])`, 'giu') : null;
+  const letra = (n) => (n < 26 ? String.fromCharCode(65 + n) : letra(Math.floor(n / 26) - 1) + letra(n % 26));
+  const apelidos = (() => {
+    try {
+      return JSON.parse(sessionStorage.getItem('__mascaraTerceiros') || '{}');
+    } catch {
+      return {};
+    }
+  })();
+  const apelido = (tipo, original) => {
+    // "SANTA CRUZ" e "SANTACRUZ" são a mesma distribuidora
+    const chave = original.replace(/[^\p{L}\d]/gu, '').toUpperCase();
+    const lista = (apelidos[tipo] ||= []);
+    let i = lista.indexOf(chave);
+    if (i < 0) {
+      lista.push(chave);
+      i = lista.length - 1;
+      try {
+        sessionStorage.setItem('__mascaraTerceiros', JSON.stringify(apelidos));
+      } catch {}
+    }
+    return caixa(original, `${tipo} ${letra(i)}`);
+  };
   const NOTA = /^\s*\d{5,9}\s*$/;
   // Iniciais do avatar do usuário de testes ("AM"), que não batem por cadeia dentro de texto maior.
   const INICIAIS = new Map([['AM', 'GL']]);
@@ -66,6 +101,14 @@
     let novo = texto;
     if (EXTRA_RX) novo = novo.replace(EXTRA_RX, (m) => EXTRA_MAPA.get(m) ?? m);
     if (EXTRA.notas && NOTA.test(novo)) novo = novo.replace(/\d{5,9}/, '000000');
+    if (TERCEIROS) {
+      novo = novo.replace(PLATAFORMA, (m) => apelido('Plataforma', m));
+      novo = novo.replace(TERCEIRO_UF, (m) => apelido('Distribuidora', m));
+      novo = novo.replace(TERCEIRO_SOZINHO, (m) => apelido('Distribuidora', m));
+      // nome sozinho no elemento (lista da tela sem UF): "ORIENTE"
+      const so = novo.trim().replace(/\s+/g, ' ').toUpperCase();
+      if (TERCEIRO_EXATO.has(so)) novo = novo.replace(novo.trim(), apelido('Distribuidora', novo.trim()));
+    }
     for (const [de, para] of ALVOS) novo = novo.split(de).join(para);
     novo = novo.replace(LOJA_REGEX, lojaMascara);
     novo = novo.replace(GRUPO_REGEX, grupoMascara);
@@ -198,11 +241,22 @@
     }
     const texto = partes.join('\n');
     const restos = [];
+    for (const linha of texto.split('\n')) {
+      if (TERCEIRO_EXATO.has(linha.trim().replace(/\s+/g, ' ').toUpperCase()) && !restos.includes('distribuidora')) {
+        restos.push('distribuidora');
+      }
+    }
     for (const [de] of ALVOS) if (texto.includes(de)) restos.push(de);
     if (EXTRA_RX) {
       EXTRA_RX.lastIndex = 0;
       if (EXTRA_RX.test(texto)) restos.push('máscara extra');
       EXTRA_RX.lastIndex = 0;
+    }
+    for (const [rx, tipo] of [[PLATAFORMA, 'plataforma'], [TERCEIRO_UF, 'distribuidora'], [TERCEIRO_SOZINHO, 'distribuidora']]) {
+      if (!rx) continue;
+      rx.lastIndex = 0;
+      if (rx.test(texto) && !restos.includes(tipo)) restos.push(tipo);
+      rx.lastIndex = 0;
     }
     if (LOJA_REGEX.test(texto)) restos.push('loja (variação)');
     LOJA_REGEX.lastIndex = 0;

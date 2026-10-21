@@ -36,11 +36,13 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 SKILL = Path(__file__).resolve().parent
 GRAVADOR = SKILL / "gravador"
-RAIZ = Path(os.environ.get("AURA_BETA_ROOT", Path.home() / "Projects/beta"))
-NOV = RAIZ / "novidades"
-UI = os.environ.get("NOV_UI", "https://ui.beta.aura.localhost")
-API = os.environ.get("NOV_API", "https://api.beta.aura.localhost")
-FONTE = Path(os.environ.get("NOV_FONTE", Path.home() / ".cache/aura-novidades/DMSans.ttf"))
+# Gravação no aura + aura-ui locais (produção = branch prod). Conteúdo, vinheta e som: aitrus/novidades
+# no Context; cores e fonte: aitrus/marca (tokens.json, fontes/), lidas daqui sem cópia.
+NOV = Path(os.environ.get("AURA_NOVIDADES_ROOT", Path.home() / "Projects/context/aitrus/novidades"))
+MARCA = NOV.parent / "marca"
+UI = os.environ.get("NOV_UI", "https://ui.aura.localhost")
+API = os.environ.get("NOV_API", "https://aura.apis.localhost")
+FONTE = Path(os.environ.get("NOV_FONTE", MARCA / "fontes/DMSans-variavel.ttf"))
 
 # Composição: quadro final 1440×900; o Aura ocupa 1232×770 (16:10) e a legenda fica abaixo.
 OUT_W, OUT_H = 1440, 900
@@ -62,7 +64,16 @@ PAUSA_MAXIMA = 1.6
 def pausa_inicio(texto: str) -> float:
     visivel = re.sub(r"\*\*", "", texto)
     return round(min(PAUSA_MAXIMA, max(PAUSA_INICIO, 0.4 + len(visivel) / 90)), 2)
-ROXO, ROXO_INK, TINTA = (124, 58, 237), (91, 33, 182), (31, 41, 55)
+
+
+def cor(nome: str) -> tuple[int, int, int]:
+    """Cor de aitrus/marca/tokens.json, em RGB."""
+    valor = json.loads((MARCA / "tokens.json").read_text())["cor"][nome].lstrip("#")
+    return tuple(int(valor[i:i + 2], 16) for i in (0, 2, 4))
+
+
+# Legenda do passo = "texto na tela" do manual (#tipo): 40 px em 1080 → 33 px em 900.
+LEGENDA_MIN = 33
 
 
 class Reprovado(Exception):
@@ -110,7 +121,7 @@ def assinatura(slug: str) -> str:
     h = hashlib.sha256()
     extra = mascara_extra(slug)
     for arquivo in (NOV / "entradas" / f"{slug}.md", NOV / "entradas/roteiros" / f"{slug}.yaml",
-                    SKILL / "mascara.js", GRAVADOR / "guarda.js", GRAVADOR / "palco.js",
+                    SKILL / "mascara.js", SKILL / "terceiros.json", GRAVADOR / "guarda.js", GRAVADOR / "palco.js",
                     *([extra] if extra else [])):
         h.update(arquivo.name.encode())
         h.update(arquivo.read_bytes())
@@ -291,7 +302,7 @@ def executar(nav: Navegador, acao: list, esperas: list | None = None, t0: float 
         nav("scrollintoview", args[0])
         time.sleep(0.5)
     elif verbo == "esperar_texto":
-        nav("wait", "--text", args[0])
+        esperar_texto(nav, args[0])
     elif verbo == "esperar_fn":
         nav("wait", "--fn", args[0])
     elif verbo == "esperar":
@@ -302,11 +313,17 @@ def executar(nav: Navegador, acao: list, esperas: list | None = None, t0: float 
         raise Reprovado(f"ação desconhecida no roteiro: {verbo}")
 
 
+def esperar_texto(nav: Navegador, texto: str) -> None:
+    """Espera o texto na página sem diferenciar caixa: título com text-transform vem em caixa-alta no innerText."""
+    alvo = json.dumps(texto.casefold())
+    nav("wait", "--fn", f"document.body.innerText.toLowerCase().includes({alvo})")
+
+
 def esperar_pronto(nav: Navegador, pronto: dict | None) -> None:
     if not pronto:
         return
     if "texto" in pronto:
-        nav("wait", "--text", pronto["texto"])
+        esperar_texto(nav, pronto["texto"])
     if "seletor" in pronto:
         nav("wait", pronto["seletor"])
     if "fn" in pronto:
@@ -320,8 +337,10 @@ def capturar(slug: str, entrada: dict, roteiro: dict, tomada: Path) -> dict:
     guarda.write_text(f"window.__GUARDA_CFG = {json.dumps(cfg)};\n" + (GRAVADOR / "guarda.js").read_text())
     mascara = tomada / "init-mascara.js"
     extra = mascara_extra(slug)
+    # distribuidoras e plataformas sempre mascaradas (terceiros.json, de aura-novidades-terceiros)
     mascara.write_text(
-        (f"window.__MASCARA_EXTRA = {extra.read_text(encoding='utf-8')};\n" if extra else "")
+        f"window.__MASCARA_TERCEIROS = {(SKILL / 'terceiros.json').read_text(encoding='utf-8')};\n"
+        + (f"window.__MASCARA_EXTRA = {extra.read_text(encoding='utf-8')};\n" if extra else "")
         + "(() => { const iniciar = () => {\n" + (SKILL / "mascara.js").read_text()
         + "\n}; if (document.body) iniciar(); else document.addEventListener('DOMContentLoaded', iniciar, { once: true }); })();\n"
     )
@@ -333,7 +352,7 @@ def capturar(slug: str, entrada: dict, roteiro: dict, tomada: Path) -> dict:
         print("captura: sessão isolada com máscara, guarda e palco", flush=True)
         nav("open", UI, globais=("--allowed-domains", dominios, "--init-script", str(guarda), "--init-script", str(mascara), "--init-script", str(GRAVADOR / "palco.js")))
         nav("set", "viewport", str(OUT_W), str(OUT_H), str(ESCALA))
-        token = subprocess.run([str(RAIZ / "scripts/beta-api-token.sh")], capture_output=True, text=True, env={**os.environ, "BETA_API_URL": API}, check=True).stdout.strip()
+        token = subprocess.run([sys.executable, str(SKILL / "aura_token.py")], capture_output=True, text=True, env={**os.environ, "NOV_API": API}, check=True).stdout.strip()
         nav("open", f"{UI}/login?token={token}&cnpj={roteiro['loja']}&redirect_uri={roteiro['origem']}")
         del token
         nav("wait", "--fn", "!location.search.includes('token=') && document.body.innerText.trim().length > 200")
@@ -449,36 +468,33 @@ def quebrar(trechos, largura, f_normal, f_negrito):
 
 
 def fundo_passo(numero: int, texto: str, destino: Path) -> None:
-    img = Image.new("RGB", (OUT_W, OUT_H))
-    topo, base = (247, 245, 255), (237, 233, 254)
-    px = img.load()
-    for y in range(OUT_H):
-        cor = tuple(round(topo[c] + (base[c] - topo[c]) * y / OUT_H) for c in range(3))
-        for x in range(OUT_W):
-            px[x, y] = cor
+    # fundo papel liso e sombra da marca (sem brilho nem degradê; #imagem)
+    img = Image.new("RGB", (OUT_W, OUT_H), cor("papel"))
     sombra = Image.new("L", (OUT_W, OUT_H), 0)
     ImageDraw.Draw(sombra).rounded_rectangle((DEMO_X, DEMO_Y + 6, DEMO_X + DEMO_W, DEMO_Y + DEMO_H + 6), 10, fill=70)
     sombra = sombra.filter(ImageFilter.GaussianBlur(14))
-    img.paste((91, 33, 182), (0, 0), sombra.point(lambda v: v // 3))
+    img.paste(cor("noite"), (0, 0), sombra.point(lambda v: v // 3))
     d = ImageDraw.Draw(img)
-    faixa_y0, faixa_y1 = DEMO_Y + DEMO_H + 8, OUT_H - 8
-    for tamanho in (30, 27, 24):
-        f_n, f_b = fonte(tamanho, 450), fonte(tamanho, 700)
+    faixa_y0, faixa_y1 = DEMO_Y + DEMO_H + 4, OUT_H - 4
+    for tamanho in (35, 34, LEGENDA_MIN):
+        f_n, f_b = fonte(tamanho, 400), fonte(tamanho, 700)
         linhas = quebrar(runs(texto), DEMO_W - 64, f_n, f_b)
         if len(linhas) <= 2:
             break
-    altura_linha = round(tamanho * 1.3)
+    if len(linhas) > 2:
+        raise Reprovado(f"legenda do passo {numero} não cabe em duas linhas de {LEGENDA_MIN} px; encurte o passo na entrada")
+    altura_linha = round(tamanho * 1.2)
     y = (faixa_y0 + faixa_y1) / 2 - len(linhas) * altura_linha / 2
     r = 21
     cy = (faixa_y0 + faixa_y1) / 2
-    d.ellipse((DEMO_X, cy - r, DEMO_X + 2 * r, cy + r), fill=ROXO)
+    d.ellipse((DEMO_X, cy - r, DEMO_X + 2 * r, cy + r), fill=cor("azul"))
     f_num = fonte(22, 700)
     d.text((DEMO_X + r, cy), str(numero), font=f_num, fill="white", anchor="mm")
     for linha in linhas:
         x = DEMO_X + 64
         for palavra, negrito in linha:
             f = f_b if negrito else f_n
-            d.text((x, y), palavra, font=f, fill=ROXO_INK if negrito else TINTA)
+            d.text((x, y), palavra, font=f, fill=cor("grafite") if negrito else cor("grafite-2"))
             x += f.getlength(palavra)
         y += altura_linha
     img.save(destino)
@@ -571,7 +587,7 @@ def montar(slug: str, entrada: dict, tomada: Path) -> None:
         raise Reprovado("a tomada não corresponde à entrada, ao roteiro ou à máscara atuais; capture de novo")
     print("montagem: vinhetas", flush=True)
     vinheta = tomada / "vinheta"
-    subprocess.run([sys.executable, str(SKILL / "video_artifacts.py"), "vinheta", str(RAIZ), str(SKILL), slug, str(vinheta)], check=True)
+    subprocess.run([sys.executable, str(SKILL / "video_artifacts.py"), "vinheta", str(NOV), str(SKILL), slug, str(vinheta)], check=True)
     partes = [vinheta / "abertura.mp4"]
     for i, (texto, info) in enumerate(zip(entrada["passos"], meta["passos"]), start=1):
         print(f"montagem: passo {i} (zoom no foco)", flush=True)

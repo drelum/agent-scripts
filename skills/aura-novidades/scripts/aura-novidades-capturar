@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
-# Funções para capturar telas do Aura Beta já mascaradas. Carregar com:
+# Funções para capturar telas do aura-ui local (aura + aura-ui, branch prod) já mascaradas. Carregar com:
 #   source ~/Projects/agent-scripts/skills/aura-novidades/scripts/aura-novidades-capturar
 # Depois:
 #   nov_login /product-assortment          # abre sessão isolada, autentica por token, viewport 1440×900
 #   ... interações com agent-browser ...
-#   nov_shot novidades/entradas/img/x.png  # mascara, verifica e captura (falha se restar dado sensível)
+#   nov_shot ~/Projects/context/aitrus/novidades/entradas/img/x.png  # mascara, verifica e captura (falha se restar dado sensível)
 #   nov_fim                                # fecha a sessão
 # Nunca imprime token, senha ou a URL de bootstrap.
 set -o pipefail
 
-NOV_RAIZ="${AURA_BETA_ROOT:-$HOME/Projects/beta}"
 NOV_SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NOV_UI="${NOV_UI:-https://ui.beta.aura.localhost}"
-NOV_API="${NOV_API:-https://api.beta.aura.localhost}"
+NOV_UI="${NOV_UI:-https://ui.aura.localhost}"
+NOV_API="${NOV_API:-https://aura.apis.localhost}"
 NOV_CNPJ="${NOV_CNPJ:-05101867000157}"
 NOV_MASCARA="$NOV_SKILL/mascara.js"
 
@@ -20,7 +19,7 @@ nov_login() {
   local rota="${1:-/product-assortment}"
   export AGENT_BROWSER_SESSION="$(agent-browser session id --scope worktree --prefix novidades)"
   local token
-  token="$(BETA_API_URL="$NOV_API" "$NOV_RAIZ/scripts/beta-api-token.sh")" || { echo "nov_login: falha ao obter token" >&2; return 1; }
+  token="$(NOV_API="$NOV_API" python3 "$NOV_SKILL/aura_token.py")" || { echo "nov_login: falha ao obter token" >&2; return 1; }
   if ! agent-browser --allowed-domains "${NOV_UI#https://},${NOV_API#https://}" \
     open "$NOV_UI/login?token=${token}&cnpj=${NOV_CNPJ}&redirect_uri=${rota}" >/dev/null 2>&1; then
     unset token
@@ -46,7 +45,8 @@ nov_shot() {
   local destino="$1"
   [ -n "$destino" ] || { echo "nov_shot: informe o arquivo de destino" >&2; return 1; }
   local resultado
-  resultado="$(agent-browser eval --stdin < "$NOV_MASCARA")" || return 1
+  # distribuidoras e plataformas entram junto com a máscara (terceiros.json)
+  resultado="$({ printf 'window.__MASCARA_TERCEIROS=%s;\n' "$(cat "$NOV_SKILL/terceiros.json")"; cat "$NOV_MASCARA"; } | agent-browser eval --stdin)" || return 1
   if ! printf '%s' "$resultado" | python3 -c 'import json,sys; v=json.load(sys.stdin); v=json.loads(v) if isinstance(v,str) else v; sys.exit(0 if isinstance(v,dict) and v.get("restos")==[] else 1)'; then
     echo "nov_shot: máscara não validada; captura cancelada" >&2
     return 1
