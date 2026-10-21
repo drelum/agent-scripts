@@ -46,7 +46,7 @@ não usar diretamente o timestamp corrigido pelo servidor. O `window_id_map` do 
 e conferir as imagens. Associação por horário/aba é aproximada; causa ou persistência exigem evidência própria.
 
 Abrir o painel com `replay_investigate serve`, loopback e portless. O agente pode usar `agent-browser`
-em sessão isolada de investigação e fecha somente sua sessão. Capturas vêm do vídeo já indexado; não
+em sessão isolada de investigação, sem exigir `visual-inspection`, e fecha somente sua sessão. Capturas vêm do vídeo já indexado; não
 reabrir/reconstruir o player para cada imagem. `annotate` salva observações e hipóteses referenciadas;
 `ticket` cria ZIP local com imagens, texto e JSON/hashes, sem publicar ou enviar.
 

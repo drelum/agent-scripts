@@ -11,7 +11,7 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Datas/horários: sempre reportar em formato brasileiro e localidade São Paulo, Brasil; converter de GMT/UTC quando necessário.
 - Screenshot: quando eu pedir para consultar o screenshot, buscar o arquivo mais recente em `/mnt/c/Users/drelu/Downloads` cujo nome comece com `Screenshot_`; no WSL, tratar `C:\Users\drelu\Downloads` como `/mnt/c/Users/drelu/Downloads`; se não encontrar, avisar claramente.
 - Paths ao usuário (arquivo/pasta que eu vou abrir): mostrar SEMPRE 2 linhas, nunca link markdown `[x](y)` (Codex reescreve o destino como path relativo e o clique quebra):
-  1. path Windows absoluto dentro de crases (preserva `\\`): obter com `wslpath -w <path-linux-absoluto>`; ex.: `\\wsl.localhost\Ubuntu\home\drelu\Projects\beta\x.mp4`; `/mnt/c/...` → `C:\...`.
+  1. path Windows absoluto dentro de crases (preserva `\\`): obter com `wslpath -w <path-linux-absoluto>`; ex.: `\\wsl.localhost\Ubuntu\home\drelu\Projects\context\x.mp4`; `/mnt/c/...` → `C:\...`.
   2. URI `file://` em texto puro, sozinho na linha, sem crases/aspas/parênteses/pontuação: `/home/...` → file://wsl.localhost/Ubuntu/home/...; `/mnt/c/...` → file:///C:/...; espaço → `%20`. É essa linha que o herdr torna clicável (plugin `herdr-windows-paths`, abre no app padrão do Windows).
   - Nunca só path relativo. Em comandos shell, manter path Linux.
 - "Make a note" => edit `AGENTS.md` (shortcut; not a blocker). Ignore `CLAUDE.md`.
@@ -28,7 +28,6 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Keep notes short; update docs on behavior/API changes (no ship w/o docs).
 - Add `read_when` hints on cross-cutting docs.
 - EVE: consultar https://eve.dev/docs/getting-started e reutilizar componentes e diretrizes de `~/Projects/eve-kit` antes de reimplementar.
-- EVE/Eval: local usa `~/Projects/agent-scripts/bin/eve-eval-isolated`; Production remota usa `~/Projects/agent-scripts/bin/eve-eval-remote-production`, identidade ES256 efêmera de `~/Projects/eve-kit`, alias Production com pin antes/depois e invalidação se mudar. Casos/oráculos ficam no agente; nunca usar OIDC de Development para atravessar ambientes nem copiar o executor para o projeto.
 - EVE/Vercel: enquanto qualquer dependência não for instalável no builder remoto (`link:` ou Git privado sem credencial), fazer deploy prebuilt somente pelo fluxo canônico do projeto: gate → `vercel pull --environment=production` → `vercel build --prod` → `vercel deploy --prebuilt --prod` → validar `/eve/v1/health` e uma trajetória real. Não usar `eve deploy` nesse modo; reavaliar quando todas as dependências forem instaláveis no build remoto.
 - Vercel/Agent Runs: consultar logs de runtime com `vercel logs` e trajetórias estruturadas com `vercel agent-runs list|inspect|trace`; usar `vercel --help` para confirmar os comandos disponíveis na CLI instalada.
 - Models: latest/current only; verify availability in the active CLI/provider before selecting or pinning; avoid static allowlists that drift.
@@ -43,6 +42,11 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 - Quando a conta importar, usar o wrapper explícito antes de ler Drive/Gmail/Docs/Sheets/Slides.
 - Login Aitrus para Gmail/Calendar/Drive/Docs/Sheets/Slides: `~/Projects/agent-scripts/bin/gws-aitrus auth login --services gmail,calendar,drive,docs,sheets,slides`; não usar `--full`, pois ele adiciona `cloud-platform` e pode causar expiração frequente por `invalid_rapt`.
 - Após autenticar a Aitrus, conferir `auth status`; `cloud-platform` deve estar ausente. Se persistir por grant anterior, revogar/limpar a autorização antiga e autenticar novamente.
+
+## Google Cloud / gcloud
+- Login único: `gcloud auth login --update-adc` renova a credencial do `gcloud` (Secret Manager, `gcloud secrets ...`) e o ADC (Cloud SQL Auth Proxy, SDKs) de uma vez; não pedir `gcloud auth application-default login` separado. Validado em 16/10/2026 (MySQL via proxy + segredo do ClickHouse).
+- `invalid_rapt`/`invalid_grant`, `Lost connection` no proxy ou falha ao ler segredo = sessão do Google Cloud vencida (controle de sessão do Workspace, novo login a cada 1–24 h): pedir `! gcloud auth login --update-adc`.
+- Conferir sem imprimir token: `gcloud auth print-access-token >/dev/null && gcloud auth application-default print-access-token >/dev/null`.
 
 ## WhatsApp / wacli
 - CLI local: `wacli`.
@@ -59,8 +63,8 @@ Style: telegraph; noun-phrases ok; drop filler/grammar; min tokens.
 
 ## Flow & Runtime
 - Use repo's package manager/runtime; no swaps w/o approval.
-- `/home/drelu/Projects/beta` é o monorepo pessoal canônico `drelum/beta`; `aura-beta/`, `aura-ui-beta/` e `eve-quote-parser/` são diretórios normais, sem Git/worktree interno. Trabalho diário e pushes usam a raiz e `origin/main`. As branches `main` de Aura/Aura UI oficiais entram somente via Git subtree; as branches oficiais `beta` são apenas destinos de promoção explícita, nunca fontes. Não fazer rebase da história subtree; seguir o `AGENTS.md` local e os scripts canônicos do monorepo.
-- Linear: slug `<ticket-number>-<descrição-curta>` sem o prefixo `aitrus-`; usar o mesmo slug em branch e worktree. Portless sem ticket: frontend `ui.<projeto>`; backend `api.<projeto>`. Com ticket: frontend `ui.<slug>.<projeto>`; backend `api.<slug>.<projeto>`. O `AGENTS.md` local registra apenas o slug estável e os comandos de desenvolvimento.
+- agent-browser: usar a CLI global do ambiente (WSL para Linux; Windows para o wrapper de Chrome Windows), sem `npx` ou dependência local nos projetos. Manter a mesma versão publicada nos dois ambientes e nas instalações globais dos Nodes usados via NVM; consultar `npm view agent-browser version` e instalar a versão explícita em cada ambiente ao atualizar. Validar `agent-browser --version` e carregar `agent-browser skills get core`; daemons já ativos podem continuar na versão anterior até o encerramento autorizado da sessão.
+- Worktree: slug `<descrição-curta>`, o mesmo na branch e no worktree. Portless: frontend `ui.<projeto>`; backend `api.<projeto>`. Em worktree: frontend `ui.<slug>.<projeto>`; backend `api.<slug>.<projeto>`. O `AGENTS.md` local registra apenas o slug estável e os comandos de desenvolvimento.
 - Dev server: prefer `portless` (requires Node.js 24+); if missing, install global `npm install -g portless`; do not add dependency to project; do not say "subir o portless"; correct: subir o servidor do projeto usando `portless`, com URL no nome do projeto; para servidor iniciado por agente, passar nome explícito; `portless` sem args só quando `portless.json`/`package.json` definir nome/script e a URL inferida for clara; long-running server => `tmux` + `portless`; inside session prefer `portless <nome-do-projeto> <comando>` (ex.: projeto `api.myapp` -> `portless api.myapp pnpm dev` -> `https://api.myapp.localhost`); reportar a URL final exibida pelo `portless`; `portless` injects `PORT`, `HOST=127.0.0.1`, `PORTLESS_URL`, `NODE_EXTRA_CA_CERTS` quando HTTPS ativo; after start, always report `tmux attach -t <sessao>` + final URL.
 - Servers via `tmux` (sessão sobrevive a crash): criar sessão (sem server) -> `send-keys` (start) -> informar `tmux attach -t <sessao>`. Ex:
 ```bash
@@ -75,29 +79,25 @@ tmux send -t "$s" "cd '$PWD' && portless <nome-do-projeto> pnpm dev" C-m; tmux a
 - Não repetir `tsc --noEmit` quando apenas duplica a cobertura de tipos do `vp check`; manter checagens adicionais quando cobrem outros tsconfigs, pacotes, declarações ou requisitos do build.
 - Build e desenvolvimento devem atender ao alvo: `vp build` para aplicações web; `vp pack`/tsdown quando adequado ao empacotamento Node.js, CLIs ou bibliotecas; preservar o builder, runtime e deploy exigidos pelo framework ou provedor. Vite+ também pode fornecer checagens e testes a um backend com build próprio. Referência: https://viteplus.dev/guide/pack.
 - Testes locais no WSL: limitar o test runner a no máximo 3 workers (`VITEST_MAX_WORKERS=3` ou opção equivalente).
-- Mudança não trivial de código: usar `autoreview` antes do handoff; dispensar em docs-only, mudança trivial, revisão independente equivalente ou quando eu optar por não executar.
-- Auto Review: congelar o escopo original; no máximo 2 ciclos de correção. Sem convergência, parar e classificar o restante em bloqueador do escopo, follow-up ou decisão necessária; não ampliar arquivos/LOC em mais de 2x sem aprovação.
-- Segunda opinião solicitada: usar `second-opinion --repo <repository>` para chamar um único Codex ou Claude com acesso amplo para investigação e retornar um laudo Markdown livre, coerente com o tema; acompanhar heartbeat e timeout interno do runner, sem envolver a execução em timeout externo; instruir explicitamente a não alterar arquivos ou estado e não implementar a recomendação sem pedido separado.
-- Mudança de comportamento observável em UI/browser: usar `visual-inspection` após a implementação e os testes; `behavior-validator` está temporariamente desabilitada.
-- Quando ambos se aplicarem: `autoreview` primeiro; `visual-inspection` depois dos testes/builds, sem concorrência com eles; até 3 inspeções simultâneas (limite do runner). Não executar painel ou múltiplos engines sem solicitação.
+- Testes na iteração: rodar só o afetado (`vitest run <testes>`, `vitest related --run <fontes>`, `--changed`); suíte/gate completo uma vez, no estado final, antes do commit/push — repetir só se falhar ou o código mudar depois. Contrato exato (projetos, scripts) segue o repo. No Claude, hook `agent-scripts/hooks/claude_full_suite_guard.py` barra suíte ampla em projetos grandes; liberar com prefixo `FULL_SUITE=1` só nesse momento.
 - Lint e formatação seguem a ferramenta configurada no projeto; Biome continua aplicável onde ainda é adotado. Não presumir o conteúdo de `lint`, `check` ou `gate` pelo nome.
 - Corrigir avisos sem usar `--quiet`, desligar regras ou reduzir escopo, asserções e cobertura para aprovar o gate. Se houver dívida preexistente ou uma exceção aprovada, reportar separadamente; não declarar zero avisos sem evidência.
-- Testes visuais e browser QA: usar a skill `visual-inspection`, que chama um worker Codex externo fixado em `gpt-6-luna` com reasoning `medium` e Fast habilitado por padrão; entregar ao worker um handoff completo do contexto relevante e acesso total ao repositório; o worker usa `agent-browser` em sessão própria/isolada, com heartbeat e timeout interno. Não executar browser QA no agente principal, envolver o runner em timeout externo nem fazer fallback silencioso.
 - Dependency/unused check: use `knip` to find unused dependencies, exports and files; preferir a versão e o comando locais.
 - Exemplo mínimo para um projeto Vite+ com pnpm: `check`: `vp check`; `test`: `vp test run --maxWorkers=3`; `gate`: `pnpm check && pnpm test && pnpm exec knip --no-progress && pnpm build`. Adaptar ao escopo real do workspace e incluir gates de agentes, bibliotecas e validações do destino de deploy quando aplicáveis; não substituir scripts existentes por este exemplo.
 - Keep it observable (logs, panes, tails).
 - Observabilidade (sempre): se eu iniciar algo em `tmux`, logo em seguida informar o comando completo de attach (`tmux attach -t <sessao>`). Se eu redirecionar output para arquivo, logo em seguida informar o comando completo de tail com caminho absoluto (sem precisar `cd`): `tail -n 200 -f /caminho/completo/para/arquivo.log`.
 
 ## Git
-- Safe by default: `git status/diff/log`. Push only when user asks.
-- Commit/push: sempre perguntar + esperar OK explicito do Andre antes de executar (mesmo se ja foi solicitado).
+- Safe by default: `git status/diff/log`.
+- Commit/push em branch que não seja `main` nem de produção (`prod`): sem pedir OK. Alvo `main` ou produção (commit, push, merge de PR): sempre perguntar + esperar OK explícito do Andre (mesmo se já foi solicitado).
 - Branch changes require user consent.
+- Context (`~/Projects/context`): continua por branch (nunca commit direto na `main`). Mudança só do Context (docs, marca, deck, specs, tracking): um único OK do André para o merge autoriza PR → merge na `main` (após checks verdes), sem novas perguntas.
 - Deletes: use `trash`; permanent/destructive ops require explicit authorization (`rm`, `git reset --hard`, `git clean`, `git restore`, ...).
 - Remotes under `~/Projects`: prefer HTTPS; flip SSH->HTTPS before pull/push.
 - Don't delete unexpected stuff; stop + ask.
 - No repo-wide search/replace scripts; keep edits small/reviewable.
 - Avoid manual `git stash`; if Git auto-stashes during pull/rebase, that's fine (hint, not hard guardrail).
-- If user types a command ("pull and push"), that's intent for that command; still ask OK before commit/push.
+- If user types a command ("pull and push"), that's intent for that command; alvo `main` ou produção ainda pede OK.
 
 ## Language/Stack Notes
 - Idioma: pt-BR em comentários e interface (UI); código/variáveis podem ser em inglês; atenção máxima à acentuação correta.

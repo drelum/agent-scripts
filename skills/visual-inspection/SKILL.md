@@ -1,6 +1,6 @@
 ---
 name: visual-inspection
-description: "Run browser QA in a separate full-access Codex worker pinned to gpt-6-luna with medium reasoning and Fast enabled by default, using agent-browser in an isolated session and returning a text report for caller assessment. Use for visual inspection, responsive checks, browser acceptance testing, screenshots, UI regressions, or any request that should keep browser work outside the main agent while sharing complete task context and repository access."
+description: "Run browser QA in a separate full-access Codex worker pinned to gpt-6-luna with medium reasoning and Fast enabled by default, using agent-browser in an isolated session and returning a text report for caller assessment. Required in development after implementing observable UI/browser behavior changes, once tests pass. Use for visual inspection, responsive checks, browser acceptance testing, screenshots, UI regressions, or any request that should keep browser work outside the main agent while sharing complete task context and repository access."
 ---
 
 # Visual Inspection

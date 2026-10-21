@@ -7,6 +7,14 @@ description: "Run an isolated, structured code review with Codex or Claude befor
 
 Run an independent source-aware review. Treat findings as advisory; verify every finding against the real code path before changing anything.
 
+## When to Run
+
+- Before handoff of any non-trivial code change. Skip for docs-only or trivial changes, when an equivalent independent review already ran, or when Andre opts out.
+- Run Auto Review before `visual-inspection`. Do not run a panel or several engines unless asked.
+
+## Scope Governor
+
+Freeze the original scope; at most 2 correction cycles. Without convergence, stop and classify the remainder as scope blocker, follow-up, or decision needed. Do not grow files/LOC beyond 2x without approval.
 
 ## Workflow
 
