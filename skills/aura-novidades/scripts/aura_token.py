@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Imprime o token (JWT) do Aura para a gravação, a partir das credenciais locais do Context.
+"""Imprime o token (JWT) do Aura para a gravação.
 
-Credenciais em ~/Projects/context/temp/aura-login.txt (AURA_LOGIN_FILE), duas linhas
-`username=…` e `password=…` (CLAUDE.md do Context, "Bater na API do Aura"). Login em
-POST {NOV_API}/auth/login (a única rota sem /api/v1). Nunca imprime senha; o token sai só no
-stdout, para quem chamou guardar em variável. Não repete depois de 401: credencial expirada ou
-conta travada, não payload errado.
+Credenciais só por ambiente: AURA_USERNAME (CPF, sem pontuação) e AURA_PASSWORD, preenchidas por
+quem chama a partir do Infisical (projeto Aitrus Apps, pasta /aura), sem arquivo e sem imprimir.
+Login em POST {NOV_API}/auth/login (a única rota sem /api/v1). O token sai só no stdout, para quem
+chamou guardar em variável. Não repete depois de 401: credencial expirada ou conta travada.
 """
 import json
 import os
@@ -13,19 +12,15 @@ import ssl
 import sys
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 API = os.environ.get("NOV_API", "https://aura.apis.localhost")
-ARQUIVO = Path(os.environ.get("AURA_LOGIN_FILE", Path.home() / "Projects/context/temp/aura-login.txt"))
 
 
 def main() -> None:
-    if not ARQUIVO.is_file():
-        sys.exit(f"aura_token: {ARQUIVO} não existe (username=… e password=…, ver CLAUDE.md do Context)")
-    cred = dict(l.split("=", 1) for l in ARQUIVO.read_text(encoding="utf-8").splitlines() if "=" in l)
-    if not cred.get("username") or not cred.get("password"):
-        sys.exit(f"aura_token: {ARQUIVO} precisa das chaves username e password")
-    corpo = json.dumps({"username": cred["username"].strip(), "password": cred["password"].strip()}).encode()
+    usuario, senha = os.environ.get("AURA_USERNAME", "").strip(), os.environ.get("AURA_PASSWORD", "")
+    if not usuario or not senha:
+        sys.exit("aura_token: defina AURA_USERNAME e AURA_PASSWORD (Infisical, Aitrus Apps, /aura); ver referencias/gravador.md")
+    corpo = json.dumps({"username": usuario, "password": senha}).encode()
     pedido = urllib.request.Request(f"{API}/auth/login", data=corpo, headers={"Content-Type": "application/json"})
     # API local do portless: certificado da CA local, confiável via NODE_EXTRA_CA_CERTS/sistema
     contexto = ssl.create_default_context()
