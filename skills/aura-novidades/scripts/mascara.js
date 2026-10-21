@@ -59,6 +59,7 @@
     ? new RegExp(`(?<![\\p{L}\\d])(?:${alternativas(TERCEIROS.com_uf)})(?=\\s*[-–]\\s*(?:${UFS})(?![\\p{L}\\d]))`, 'giu')
     : null;
   const TERCEIRO_SOZINHO = TERCEIROS ? new RegExp(`(?<![\\p{L}\\d])(?:${alternativas(TERCEIROS.sozinho)})(?![\\p{L}\\d])`, 'giu') : null;
+  const TERCEIRO_EXATO = new Set((TERCEIROS?.exato ?? []).map((n) => n.toUpperCase()));
   const PLATAFORMA = TERCEIROS ? new RegExp(`(?<![\\p{L}\\d])(?:${alternativas(TERCEIROS.plataformas)})(?![\\p{L}\\d])`, 'giu') : null;
   const letra = (n) => (n < 26 ? String.fromCharCode(65 + n) : letra(Math.floor(n / 26) - 1) + letra(n % 26));
   const apelidos = (() => {
@@ -104,6 +105,9 @@
       novo = novo.replace(PLATAFORMA, (m) => apelido('Plataforma', m));
       novo = novo.replace(TERCEIRO_UF, (m) => apelido('Distribuidora', m));
       novo = novo.replace(TERCEIRO_SOZINHO, (m) => apelido('Distribuidora', m));
+      // nome sozinho no elemento (lista da tela sem UF): "ORIENTE"
+      const so = novo.trim().replace(/\s+/g, ' ').toUpperCase();
+      if (TERCEIRO_EXATO.has(so)) novo = novo.replace(novo.trim(), apelido('Distribuidora', novo.trim()));
     }
     for (const [de, para] of ALVOS) novo = novo.split(de).join(para);
     novo = novo.replace(LOJA_REGEX, lojaMascara);
@@ -237,6 +241,11 @@
     }
     const texto = partes.join('\n');
     const restos = [];
+    for (const linha of texto.split('\n')) {
+      if (TERCEIRO_EXATO.has(linha.trim().replace(/\s+/g, ' ').toUpperCase()) && !restos.includes('distribuidora')) {
+        restos.push('distribuidora');
+      }
+    }
     for (const [de] of ALVOS) if (texto.includes(de)) restos.push(de);
     if (EXTRA_RX) {
       EXTRA_RX.lastIndex = 0;

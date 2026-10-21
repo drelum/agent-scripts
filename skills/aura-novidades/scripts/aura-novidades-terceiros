@@ -11,6 +11,8 @@ Camadas (aplicadas por mascara.js):
   com_uf   qualquer nome seguido de " - UF" (rótulo da tela: "PANPHARMA - SP"), inclusive indústria
            com venda direta e sigla curta, que sozinhas seriam ambíguas;
   sozinho  distribuidora com nome inconfundível, trocada em qualquer lugar;
+  exato    texto que é só o nome de uma distribuidora (lista da tela sem UF), exceto fabricante, que
+           aparece sozinho na linha do produto;
   plataformas  plataformas de integração, trocadas em qualquer lugar.
 """
 import json
@@ -64,6 +66,8 @@ def main() -> None:
         "gerado_em": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "com_uf": nomes + [p for p in plataformas if p.upper() not in nomes],
         "sozinho": sozinho,
+        "exato": [n for n in nomes if len(junto(n)) >= 3
+                  and not any(junto(n).startswith(f) or f.startswith(junto(n)) for f in fabricantes)],
         "plataformas": plataformas,
     }
     destino = SKILL / "terceiros.json"
