@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Funções para capturar telas do Aura Beta já mascaradas. Carregar com:
+# Funções para capturar telas do aura-ui local (aura + aura-ui, branch prod) já mascaradas. Carregar com:
 #   source ~/Projects/agent-scripts/skills/aura-novidades/scripts/aura-novidades-capturar
 # Depois:
 #   nov_login /product-assortment          # abre sessão isolada, autentica por token, viewport 1440×900
@@ -9,10 +9,9 @@
 # Nunca imprime token, senha ou a URL de bootstrap.
 set -o pipefail
 
-NOV_RAIZ="${AURA_BETA_ROOT:-$HOME/Projects/beta}"
 NOV_SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NOV_UI="${NOV_UI:-https://ui.beta.aura.localhost}"
-NOV_API="${NOV_API:-https://api.beta.aura.localhost}"
+NOV_UI="${NOV_UI:-https://ui.aura.localhost}"
+NOV_API="${NOV_API:-https://aura.apis.localhost}"
 NOV_CNPJ="${NOV_CNPJ:-05101867000157}"
 NOV_MASCARA="$NOV_SKILL/mascara.js"
 
@@ -20,7 +19,7 @@ nov_login() {
   local rota="${1:-/product-assortment}"
   export AGENT_BROWSER_SESSION="$(agent-browser session id --scope worktree --prefix novidades)"
   local token
-  token="$(BETA_API_URL="$NOV_API" "$NOV_RAIZ/scripts/beta-api-token.sh")" || { echo "nov_login: falha ao obter token" >&2; return 1; }
+  token="$(NOV_API="$NOV_API" python3 "$NOV_SKILL/aura_token.py")" || { echo "nov_login: falha ao obter token" >&2; return 1; }
   if ! agent-browser --allowed-domains "${NOV_UI#https://},${NOV_API#https://}" \
     open "$NOV_UI/login?token=${token}&cnpj=${NOV_CNPJ}&redirect_uri=${rota}" >/dev/null 2>&1; then
     unset token

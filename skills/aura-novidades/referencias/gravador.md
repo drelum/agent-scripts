@@ -7,9 +7,11 @@ garante e os aprendizados de gravação.
 
 ## Pré-requisitos
 
-- API e UI Beta no ar (`https://api.beta.aura.localhost`, `https://ui.beta.aura.localhost`; subida
-  no `AGENTS.md` da raiz do monorepo: Cloud SQL Auth Proxy, `aura-beta`, `aura-ui-beta` em tmux) e
-  `./scripts/beta-api-token.sh` devolvendo token. Depois de reboot, tudo precisa subir de novo.
+- `aura` e `aura-ui` locais no ar, a partir da `origin/prod` (`https://aura.apis.localhost`,
+  `https://ui.aura.localhost`; subida em `produtos/aura/docs/aura-api/core/setup-local.md` e
+  `produtos/aura/docs/aura-ui/core/setup-local.md`, no Context). Os dois leem o banco de produção:
+  a guarda de escrita é o que impede gravar dados. Token: `scripts/aura_token.py`, com as
+  credenciais de `context/temp/aura-login.txt`.
 - `agent-browser` ≥ 0.38 (`record --cursor`, `click --human`, `--init-script`), `ffmpeg`,
   `ffprobe`, Node ≥ 24, `python3` com Pillow e PyYAML. Fonte e cores da legenda vêm de
   `aitrus/marca/` (`fontes/DMSans-variavel.ttf`, `tokens.json`), ao lado de `aitrus/novidades/`.
@@ -27,7 +29,7 @@ garante e os aprendizados de gravação.
 ```
 
 Variáveis de ambiente (padrões entre parênteses): `AURA_NOVIDADES_ROOT`
-(`~/Projects/context/aitrus/novidades`), `AURA_BETA_ROOT` (`~/Projects/beta`, só o token), `NOV_UI`,
+(`~/Projects/context/aitrus/novidades`), `AURA_LOGIN_FILE` (`~/Projects/context/temp/aura-login.txt`), `NOV_UI`,
 `NOV_API`, `NOV_FONTE`, `NOV_ESCALA` (1,5; 2 faz o codificador atrasar), `NOV_LIMITE_S` (45; só para
 vídeo avulso), `NOV_CONGELA_CLIQUE` (1,0 s), `AGENT_BROWSER_ARGS` (ex.: `--lang=pt-BR` para campos
 nativos de mês e data em português).

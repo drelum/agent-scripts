@@ -1,6 +1,6 @@
 ---
 name: aura-novidades
-description: "Publicar novidades da aitrus (o que chega ao Aura Beta) em novidades.aitrus.com.br, organizadas por mês, a partir do Context (aitrus/novidades): levantar o que mudou no histórico do Beta (contexto do mês), escrever cada novidade em linguagem de farmácia (o que é, por que importa, como ajuda na rotina, como usar, bom saber), gravar o vídeo por passo com o gravador v2 (máscara, guarda de escrita, zoom, legenda, momento de valor), escrever o resumo do mês, conferir no celular e em 1366×768, publicar por pull request no Context (Cloudflare Pages) e registrar. Usar quando Andre pedir para publicar novidades, fechar o mês, atualizar o site de novidades, gerar ou regravar o vídeo de uma novidade, revisar marca ou tom das novidades, ou ao fechar um ticket Beta com efeito visível ao gestor."
+description: "Publicar novidades da aitrus (o que chegou a produção no aura e no aura-ui) em novidades.aitrus.com.br, organizadas por mês, a partir do Context (aitrus/novidades): levantar o que entrou na branch prod (contexto do mês), escrever cada novidade em linguagem de farmácia (o que é, por que importa, como ajuda na rotina, como usar, bom saber), gravar o vídeo por passo com o gravador v2 (máscara, guarda de escrita, zoom, legenda, momento de valor), escrever o resumo do mês, conferir no celular e em 1366×768, publicar por pull request no Context (Cloudflare Pages) e registrar. Usar quando Andre pedir para publicar novidades, fechar o mês, atualizar o site de novidades, gerar ou regravar o vídeo de uma novidade, revisar marca ou tom das novidades, ou quando uma mudança com efeito visível ao gestor chegar a produção."
 ---
 
 # Novidades da aitrus
@@ -9,8 +9,8 @@ Site estático `https://novidades.aitrus.com.br`, para o dono da farmácia e o g
 organizado por mês. Conteúdo, build, vinheta e sons em `~/Projects/context/aitrus/novidades/`
 (raiz configurável por `AURA_NOVIDADES_ROOT`; abaixo, `novidades/`), desde 21/10/2026. A marca vem
 de `aitrus/marca/` (manual em `index.html`), lida pelo build, pela vinheta e pelo gravador; nada da
-marca é copiado. O monorepo Beta (`~/Projects/beta`, `AURA_BETA_ROOT`) continua sendo a fonte do
-que mudou, dos tickets e do ambiente de gravação. `<skill-dir>` é a pasta deste arquivo. Esta skill
+marca é copiado. Fonte do que vira novidade: o que chegou a produção, ou seja, a branch `prod` do
+`aura` e do `aura-ui`; a gravação usa os dois rodando localmente. `<skill-dir>` é a pasta deste arquivo. Esta skill
 **é** o processo; os scripts em `<skill-dir>/scripts/` são ferramentas.
 
 ## Primeira vez aqui? Ler nesta ordem
@@ -39,7 +39,7 @@ que mudou, dos tickets e do ambiente de gravação. `<skill-dir>` é a pasta des
 | `aitrus/marca/` | Manual, tokens, fontes e logo: fonte única da marca. |
 | Este `SKILL.md` | **Execução**: ciclo, comandos, checklists, decisões vigentes. |
 | `<skill-dir>/referencias/gravador.md` | Gravador: comandos, campos do roteiro, garantias, conferência do vídeo, aprendizados. |
-| `beta-tickets.md` (raiz do monorepo Beta) | Liga ticket ↔ novidade. |
+| Ticket no Linear (`AITRUS-N`) | Liga ticket ↔ novidade (campo `ticket` da entrada). |
 
 | Ferramenta | Para quê | Etapa |
 |---|---|---|
@@ -96,7 +96,7 @@ Valem até o Andre mudar; ao mudar, atualizar aqui (com a data) e, se for regra 
 
 ## Quando rodar
 
-- **Ticket Beta integrado com efeito visível ao gestor**: no mesmo dia, etapas 1 a 9 para a
+- **Mudança com efeito visível ao gestor chegou a produção**: no mesmo dia, etapas 1 a 9 para a
   novidade (ou atualizar a novidade do tema, se já existir) e atualizar o resumo do mês corrente.
 - **Andre pede "publicar novidades" ou "atualizar o site"**: etapa 1 desde a última entrada, depois
   o ciclo.
@@ -109,8 +109,8 @@ Valem até o Andre mudar; ao mudar, atualizar aqui (com a data) e, se for regra 
 
 ### 0. Antes de começar
 
-- API e UI Beta no ar e token funcionando (ver `referencias/gravador.md`, "Pré-requisitos").
-  Depois de reboot, subir tudo de novo pelo `AGENTS.md` da raiz.
+- `aura` e `aura-ui` locais no ar, a partir da `origin/prod`, e token funcionando (ver
+  `referencias/gravador.md`, "Pré-requisitos").
 - No Context: branch nova a partir da `origin/main` (worktree, se a checkout principal estiver em
   uso) e `git status` em `aitrus/novidades/` antes de mexer.
 
@@ -118,12 +118,12 @@ Valem até o Andre mudar; ao mudar, atualizar aqui (com a data) e, se for regra 
 
 ```bash
 <skill-dir>/scripts/aura-novidades-pendentes                                   # desde a última entrada
-git -C ~/Projects/beta log --since=AAAA-MM-01 --until=AAAA-MM-31 --oneline     # o mês inteiro
+<skill-dir>/scripts/aura-novidades-pendentes AAAA-MM-01                        # o mês inteiro
 ```
 
 Criar ou atualizar `contexto/AAAA-MM.md` (modelo: `contexto/2026-09.md`):
 
-1. Ler o histórico do mês e `beta-tickets.md`. Separar o que muda o uso ou o valor para a farmácia
+1. Ler o que entrou na `prod` no mês e os tickets do Linear. Separar o que muda o uso ou o valor para a farmácia
    do que fica de fora (infraestrutura, desempenho, correção que só devolve o esperado, trabalho em
    andamento); listar o que ficou de fora e o motivo.
 2. Agrupar por **tema do leitor** (tela ou tarefa), não por ticket. Cada tema vira uma novidade.
@@ -138,7 +138,7 @@ colateral), dados necessários e a loja onde eles existem hoje. Decidir se leva 
 ### 2. Escrever a novidade
 
 Copiar `modelos/novidade.md` para `entradas/AAAA-MM-DD-slug.md` (a data é o dia em que ficou
-disponível no Beta). O que cada seção entrega está na tabela do molde em `CONVENCOES.md`.
+disponível em produção). O que cada seção entrega está na tabela do molde em `CONVENCOES.md`.
 
 Como redigir:
 
@@ -243,7 +243,7 @@ respondem 200 em `https://novidades.aitrus.com.br`. Mudanças da skill vão para
 ### 9. Registrar
 
 - O link para o cliente é a página principal (o mês) ou, para uma novidade só, a página dela.
-- `beta-tickets.md`: o ticket recebe o slug da novidade publicada.
+- Linear: o ticket recebe o link da novidade publicada.
 - `contexto/AAAA-MM.md`: marcar o tema como publicado, com o slug.
 - Critério novo, decisão nova ou armadilha nova: registrar aqui (decisões) ou em
   `referencias/gravador.md` (aprendizados).

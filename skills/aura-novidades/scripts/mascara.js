@@ -10,7 +10,7 @@
 //   2. qualquer CNPJ, formatado ou só dígitos, por expressão regular;
 //   3. atributos visíveis (title, placeholder, aria-label, value de inputs).
 (() => {
-  // Substituições explícitas: loja/grupo/usuário do ambiente Beta local. Acrescente novos pares
+  // Substituições explícitas: loja/grupo/usuário usados nas gravações. Acrescente novos pares
   // quando capturar em outro contexto; a ordem importa (cadeias mais longas primeiro).
   const ALVOS = [
     ['Drogarias Da Vovo', 'Farmácia Modelo'],
@@ -28,7 +28,7 @@
   // variações da loja de testes que não batem por cadeia exata (singular, maiúsculas, acento)
   const LOJA_REGEX = /drogarias?\s+da\s+vov[oó]/gi;
   const GRUPO_REGEX = /genivaldo\s+oliveira(?:\s*\(sabara\s+mg\))?/gi;
-  // Outras redes usadas em demonstrações (Itufarma: caso real de EAN irmão, BETA-158).
+  // Outras redes usadas em demonstrações (Itufarma: caso real de EAN irmão).
   const OUTRAS = [
     [/itufarma\s+drogaria\s+ltda/gi, 'Farmácia Modelo Ltda'],
     [/itufarma/gi, 'Farmácia Modelo'],

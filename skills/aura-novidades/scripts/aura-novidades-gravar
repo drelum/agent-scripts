@@ -36,13 +36,12 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 SKILL = Path(__file__).resolve().parent
 GRAVADOR = SKILL / "gravador"
-# Monorepo Beta: só o token da API de gravação. Conteúdo, vinheta e som: aitrus/novidades no Context;
-# cores e fonte: aitrus/marca (tokens.json, fontes/), lidas daqui sem cópia.
-RAIZ = Path(os.environ.get("AURA_BETA_ROOT", Path.home() / "Projects/beta"))
+# Gravação no aura + aura-ui locais (produção = branch prod). Conteúdo, vinheta e som: aitrus/novidades
+# no Context; cores e fonte: aitrus/marca (tokens.json, fontes/), lidas daqui sem cópia.
 NOV = Path(os.environ.get("AURA_NOVIDADES_ROOT", Path.home() / "Projects/context/aitrus/novidades"))
 MARCA = NOV.parent / "marca"
-UI = os.environ.get("NOV_UI", "https://ui.beta.aura.localhost")
-API = os.environ.get("NOV_API", "https://api.beta.aura.localhost")
+UI = os.environ.get("NOV_UI", "https://ui.aura.localhost")
+API = os.environ.get("NOV_API", "https://aura.apis.localhost")
 FONTE = Path(os.environ.get("NOV_FONTE", MARCA / "fontes/DMSans-variavel.ttf"))
 
 # Composição: quadro final 1440×900; o Aura ocupa 1232×770 (16:10) e a legenda fica abaixo.
@@ -347,7 +346,7 @@ def capturar(slug: str, entrada: dict, roteiro: dict, tomada: Path) -> dict:
         print("captura: sessão isolada com máscara, guarda e palco", flush=True)
         nav("open", UI, globais=("--allowed-domains", dominios, "--init-script", str(guarda), "--init-script", str(mascara), "--init-script", str(GRAVADOR / "palco.js")))
         nav("set", "viewport", str(OUT_W), str(OUT_H), str(ESCALA))
-        token = subprocess.run([str(RAIZ / "scripts/beta-api-token.sh")], capture_output=True, text=True, env={**os.environ, "BETA_API_URL": API}, check=True).stdout.strip()
+        token = subprocess.run([sys.executable, str(SKILL / "aura_token.py")], capture_output=True, text=True, env={**os.environ, "NOV_API": API}, check=True).stdout.strip()
         nav("open", f"{UI}/login?token={token}&cnpj={roteiro['loja']}&redirect_uri={roteiro['origem']}")
         del token
         nav("wait", "--fn", "!location.search.includes('token=') && document.body.innerText.trim().length > 200")
