@@ -130,6 +130,12 @@ Validação (08–21/09/2026): `cart_checkout_succeeded` = 976 contra 910 carrin
 - ~80% das sessões vêm de portais: `app.otimizafarma.com.br` (vários destinos) e `super-app.grupohipersaude.com.br`
   (100% para `/offers`), via `/login?token=…&redirect_uri=…`.
 - Home padrão sem `redirect_uri`: `/mix-produto` (Aura UI; conferir código se a pergunta depender disso).
+- Retorno do portal GHS (verificado em 21/10/2026, 60 dias): o portal `app.otimizafarma.com.br` (`super-app.grupohipersaude.com.br`
+  até 10/09) abre o Aura **em aba nova** (99 de 99 pares anônimo→retorno com `$window_id` diferente, mesmo `$device_id`) e com
+  `redirect_uri` **fixo do bloco clicado** (`offers`, `product-assortment`, `sale-analysis`, `market-analysis`, `pbm-analysis`), ignorando o
+  destino pedido pelo Aura. Desde 09/10 o token sai da URL antes do analytics: o retorno aparece como `/login?redirect_uri=…` com
+  referrer do portal, sem `token`. Tempo entre `/login` anônimo e retorno: p50 94 s, p75 208 s, p90 733 s, máx. 22 min (n=43).
+  ~98% dos retornos são desktop (Windows Chrome/Edge).
 
 ## Campanhas (`utm_*`) — produção desde 17/10/2026; modelo revisto em 18/10/2026 (aura-ui #822/#824, aura #1392)
 
