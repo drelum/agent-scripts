@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 # Lista o que mudou no Beta desde a última novidade publicada: commits e tickets tocados.
 # Uso: aura-novidades-pendentes [AAAA-MM-DD]   (padrão: data da entrada mais recente)
-# Raiz do monorepo Beta: AURA_BETA_ROOT (padrão ~/Projects/beta).
+# Monorepo Beta (commits e tickets): AURA_BETA_ROOT (padrão ~/Projects/beta).
+# Novidades publicadas: AURA_NOVIDADES_ROOT (padrão ~/Projects/context/aitrus/novidades).
 set -euo pipefail
 raiz="${AURA_BETA_ROOT:-$HOME/Projects/beta}"
+nov="${AURA_NOVIDADES_ROOT:-$HOME/Projects/context/aitrus/novidades}"
 cd "$raiz"
 
 desde="${1:-}"
 if [ -z "$desde" ]; then
-  ultimo="$(ls novidades/entradas/*.md 2>/dev/null | sed 's|.*/||' | sort | tail -1)"
+  ultimo="$(ls "$nov"/entradas/*.md 2>/dev/null | sed 's|.*/||' | sort | tail -1)"
   desde="${ultimo:0:10}"
   [ -n "$desde" ] || desde="$(date -d '-7 days' +%F)"
 fi
 
 echo "== Novidades publicadas (última: ${ultimo:-nenhuma})"
-ls novidades/entradas/*.md 2>/dev/null | sed 's|.*/||; s|\.md$||' | sort -r | head -5
+ls "$nov"/entradas/*.md 2>/dev/null | sed 's|.*/||; s|\.md$||' | sort -r | head -5
 
 echo
 echo "== Commits do Beta desde $desde (aura-beta, aura-ui-beta, eve-quote-parser)"
@@ -44,4 +46,4 @@ for b in blocos:
 EOF
 
 echo
-echo "== Próximo passo: para cada item com efeito visível ao gestor, uma entrada em novidades/entradas/."
+echo "== Próximo passo: para cada item com efeito visível ao gestor, uma entrada em $nov/entradas/."

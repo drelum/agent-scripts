@@ -1,4 +1,4 @@
-"""Assinaturas de tomadas e cache validado de vinhetas. Não guarda autenticação."""
+"""Assinatura e cache validado das vinhetas. Não guarda autenticação."""
 import fcntl
 import hashlib
 import json
@@ -15,26 +15,25 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def signature(kind, root, skill, slug):
-    nov = Path(root) / "novidades"
+# Arquivos da marca (aitrus/marca/) que a vinheta usa: mudar qualquer um invalida o cache.
+MARCA_VINHETA = ("tokens.css", "fontes/Archivo-variavel.ttf", "fontes/DMSans-variavel.ttf",
+                 "logo/aitrus-abertura.svg", "logo/aitrus-cor.svg", "logo/aitrus-noite.svg",
+                 "logo/orbita.svg", "logo/orbita-noite.svg")
+
+
+def signature(nov, skill, slug):
+    """Assinatura da vinheta de uma novidade; nov = raiz das novidades (aitrus/novidades)."""
+    nov = Path(nov)
     skill = Path(skill)
     config = json.loads((nov / "vinheta.json").read_text())
-    files = [nov / "entradas" / f"{slug}.md"]
-    if kind == "capture":
-        files += [nov / "entradas/roteiros" / f"{slug}.sh"]
-        files += [skill / name for name in ("aura-novidades-video", "mascara.js", "video-overlay.js", "video_artifacts.py")]
-        context = {key: os.environ.get(key, default) for key, default in (
-            ("NOV_UI", "https://ui.beta.aura.localhost"),
-            ("NOV_API", "https://api.beta.aura.localhost"), ("NOV_CNPJ", "05101867000157"))}
-        context["video"] = config.get("video", {})
-    else:
-        files += [nov / "vinheta.json", skill / "aura-novidades-vinheta", skill / "video_artifacts.py"]
-        files += sorted(p for p in (nov / "vinheta").rglob("*") if p.is_file())
-        logo = config.get("som", {}).get("logo")
-        if logo and (nov / logo).is_file():
-            files.append(nov / logo)
-        context = {}
-    payload = {"context": context, "files": [(p.name, digest(p)) for p in files]}
+    files = [nov / "entradas" / f"{slug}.md", nov / "vinheta.json", nov / "areas.json",
+             skill / "aura-novidades-vinheta", skill / "video_artifacts.py"]
+    files += sorted(p for p in (nov / "vinheta").rglob("*") if p.is_file())
+    files += [nov.parent / "marca" / name for name in MARCA_VINHETA]
+    logo = config.get("som", {}).get("logo")
+    if logo and (nov / logo).is_file():
+        files.append(nov / logo)
+    payload = {"files": [(p.name, digest(p)) for p in files]}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
@@ -56,13 +55,13 @@ def valid(directory, key, names):
         return False
 
 
-def cached_vinheta(root, skill, slug, destination):
-    key = signature("vinheta", root, skill, slug)
+def cached_vinheta(nov, skill, slug, destination):
+    key = signature(nov, skill, slug)
     base = Path(os.environ.get("NOV_VIDEO_CACHE", f"/tmp/aura-novidades-cache-{os.getuid()}"))
     base.mkdir(mode=0o700, parents=True, exist_ok=True)
     target = base / key
     names = ["abertura.mp4", "encerramento.mp4"]
-    config = json.loads((Path(root) / "novidades/vinheta.json").read_text())
+    config = json.loads((Path(nov) / "vinheta.json").read_text())
     if config.get("som", {}).get("logoSonoro"):
         names.append("logo-sonoro.wav")
     # Um renderer por assinatura; arquivos incompletos nunca são cache válido.
@@ -72,7 +71,8 @@ def cached_vinheta(root, skill, slug, destination):
             print("vinheta: cache validado", flush=True)
         else:
             pending = Path(tempfile.mkdtemp(prefix=f"{key}.", dir=base))
-            subprocess.run([str(Path(skill) / "aura-novidades-vinheta"), "--render", slug, str(pending)], check=True)
+            subprocess.run([str(Path(skill) / "aura-novidades-vinheta"), "--render", slug, str(pending)], check=True,
+                           env={**os.environ, "AURA_NOVIDADES_ROOT": str(nov)})
             for name in names:
                 subprocess.run(["ffmpeg", "-v", "error", "-xerror", "-i", str(pending / name), "-f", "null", "-"], check=True)
             save(pending, key, names)
@@ -90,14 +90,6 @@ def cached_vinheta(root, skill, slug, destination):
 
 if __name__ == "__main__":
     command, *args = sys.argv[1:]
-    if command == "signature":
-        print(signature(*args))
-    elif command == "save":
-        save(args[0], args[1], args[2:])
-    elif command == "check":
-        if not valid(args[0], args[1], args[2:]):
-            sys.exit("tomada ausente, alterada ou incompatível com entrada/roteiro/configuração; capture novamente")
-    elif command == "vinheta":
-        cached_vinheta(*args)
-    else:
-        sys.exit("operação de artefatos inválida")
+    if command != "vinheta":
+        sys.exit("uso: video_artifacts.py vinheta <raiz-das-novidades> <skill> <slug> <destino>")
+    cached_vinheta(*args)

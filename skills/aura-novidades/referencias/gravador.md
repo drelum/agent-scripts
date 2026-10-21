@@ -11,8 +11,9 @@ garante e os aprendizados de gravação.
   no `AGENTS.md` da raiz do monorepo: Cloud SQL Auth Proxy, `aura-beta`, `aura-ui-beta` em tmux) e
   `./scripts/beta-api-token.sh` devolvendo token. Depois de reboot, tudo precisa subir de novo.
 - `agent-browser` ≥ 0.38 (`record --cursor`, `click --human`, `--init-script`), `ffmpeg`,
-  `ffprobe`, Node ≥ 24, `python3` com Pillow e PyYAML, fonte DM Sans em
-  `~/.cache/aura-novidades/DMSans.ttf` (Google Fonts, `ofl/dmsans`).
+  `ffprobe`, Node ≥ 24, `python3` com Pillow e PyYAML. Fonte e cores da legenda vêm de
+  `aitrus/marca/` (`fontes/DMSans-variavel.ttf`, `tokens.json`), ao lado de `aitrus/novidades/`.
+- `terceiros.json` atual (`aura-novidades-terceiros`; rodar quando entrar distribuidora nova).
 - `vinheta.json` válido e cada som com linha em `som/LICENCA.md`.
 - Nada pesado rodando na máquina (outro navegador, ffmpeg, build grande): o codificador fica para
   trás e a tomada sai com quadros perdidos.
@@ -25,7 +26,8 @@ garante e os aprendizados de gravação.
 <skill-dir>/scripts/aura-novidades-gravar <slug> --compor <dir>  # remonta uma tomada (recusa se entrada, roteiro ou máscara mudaram)
 ```
 
-Variáveis de ambiente (padrões entre parênteses): `AURA_BETA_ROOT` (`~/Projects/beta`), `NOV_UI`,
+Variáveis de ambiente (padrões entre parênteses): `AURA_NOVIDADES_ROOT`
+(`~/Projects/context/aitrus/novidades`), `AURA_BETA_ROOT` (`~/Projects/beta`, só o token), `NOV_UI`,
 `NOV_API`, `NOV_FONTE`, `NOV_ESCALA` (1,5; 2 faz o codificador atrasar), `NOV_LIMITE_S` (45; só para
 vídeo avulso), `NOV_CONGELA_CLIQUE` (1,0 s), `AGENT_BROWSER_ARGS` (ex.: `--lang=pt-BR` para campos
 nativos de mês e data em português).
@@ -76,8 +78,9 @@ Bloqueados, quebram o carregamento e a espera estoura sem mensagem clara.
 - Esperas acima de 1,2 s cortadas (mantém 0,4 s nas pontas); ação lenta acima de 2 s mantém só os
   últimos 1,6 s.
 - Zoom suave no foco depois do "pronto"; tela parada no início do passo por 0,8–1,6 s, conforme o
-  tamanho da legenda; legenda numerada numa faixa abaixo da tela (Pillow + DM Sans).
-- Vinhetas de `vinheta.json` (abertura 5 s, encerramento 4 s), trilha e logo sonoro; capa no
+  tamanho da legenda; legenda numerada numa faixa abaixo da tela (Pillow, DM Sans e cores dos
+  tokens; 33 a 35 px, no máximo duas linhas, ou a tomada é reprovada).
+- Vinhetas de `vinheta.json` (abertura 4,5 s, encerramento 3 s), trilha e logo sonoro; capa no
   quadro 0; duração até `NOV_LIMITE_S`.
 - Mídia gerada e validada numa área temporária antes de substituir, de uma vez, os arquivos
   publicados.
@@ -134,6 +137,10 @@ Máximo de duas regravações por novidade; sem convergência, parar e relatar a
   Conferir o cenário na véspera; sem dados, manter o vídeo anterior e registrar a pendência.
 - A máscara cobre representantes conhecidos e qualquer telefone; nome novo de representante ou
   pessoa entra em `ALVOS` de `mascara.js` antes de gravar (a mudança invalida tomadas anteriores).
+- Distribuidoras e plataformas (`terceiros.json`) viram "Distribuidora A, B…" e "Plataforma A…",
+  na ordem em que aparecem, iguais em toda a sessão. Três camadas: nome seguido de " - UF" (rótulo
+  da tela, inclusive indústria com venda direta e sigla curta), nome inconfundível em qualquer
+  lugar, e plataformas. Fabricante no nome do produto não é trocado.
 - Cotações Externas: abrir a lista retoma importações "recebidas" ou "em análise"; conferir antes
   que "Lendo" está zerado.
 
@@ -143,14 +150,17 @@ Só texto, ou uma tela avulsa mascarada:
 
 ```bash
 source <skill-dir>/scripts/aura-novidades-capturar
-nov_login /rota && nov_shot ~/Projects/beta/novidades/entradas/img/<slug>.png && nov_fim
+nov_login /rota && nov_shot ~/Projects/context/aitrus/novidades/entradas/img/<slug>.png && nov_fim
 ```
 
 ## Vinheta
 
-`vinheta.json` define conceito, textos, cores, duração e som; modelo em `vinheta/`, simulador em
-`https://ui.vinheta.localhost` (`portless ui.vinheta node novidades/vinheta/servidor.mjs`). O
-gravador renderiza e guarda em cache (`video_artifacts.py`, `aura-novidades-vinheta`). Mudança passa
-pelo simulador e pelo OK do Andre. Chave do ElevenLabs (plano Starter da Aitrus, licença comercial)
+Desenho em `vinheta/vinheta.html`, a partir de `aitrus/marca/modelos/video-quadros.html`: abertura
+com o logo animado oficial e o quadro "Miniatura" com o título (que vira a capa), encerramento
+noite parado. `vinheta.json` define só duração, textos e som; cores, fontes e logo vêm de
+`aitrus/marca/`. Ver com `aura-novidades-vinheta --simular <slug>` (serve `aitrus/` em
+127.0.0.1 e imprime as URLs). O gravador renderiza e guarda em cache (`video_artifacts.py`,
+`aura-novidades-vinheta`); mudar a marca invalida o cache. Mudança de desenho passa pelo OK do
+Andre. Chave do ElevenLabs (plano Starter da Aitrus, licença comercial)
 no Infisical (`Aitrus Apps` · `staging` · `/shared` · `ELEVENLABS_API_KEY`), usada só via
 `infisical run`, nunca impressa.

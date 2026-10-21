@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""Gera terceiros.json: nomes de distribuidoras e plataformas que a máscara troca nas gravações.
+
+Manual de marca (#imagem, #checklist): distribuidora e plataforma de integração só aparecem com
+autorização por escrito; nas capturas, ficam mascaradas. Fonte: produção, só leitura, pelas skills
+query-clickhouse e query-mysql do Context. Rodar quando entrar distribuidora ou plataforma nova:
+
+    aura-novidades-terceiros            # grava terceiros.json ao lado deste script
+
+Camadas (aplicadas por mascara.js):
+  com_uf   qualquer nome seguido de " - UF" (rótulo da tela: "PANPHARMA - SP"), inclusive indústria
+           com venda direta e sigla curta, que sozinhas seriam ambíguas;
+  sozinho  distribuidora com nome inconfundível, trocada em qualquer lugar;
+  plataformas  plataformas de integração, trocadas em qualquer lugar.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+SKILL = Path(__file__).resolve().parent
+NOV = Path(os.environ.get("AURA_NOVIDADES_ROOT", Path.home() / "Projects/context/aitrus/novidades"))
+CONTEXT = NOV.parent.parent
+CLICKHOUSE = CONTEXT / ".claude/skills/query-clickhouse/scripts/query_clickhouse.py"
+MYSQL = CONTEXT / ".claude/skills/query-mysql/scripts/query_mysql.py"
+
+# Plataformas de integração (aura.provider): sempre mascaradas, com as grafias da tela.
+PLATAFORMAS = {"SMARTPED": ["Smartped", "SmartPed"], "FOCOPDV": ["Foco PDV"], "PORTALPBM": ["Portal do PBM"],
+               "MERCADOFARMA": ["Mercado Farma"], "IQVIA": [], "ABCFARMA": [], "IMENDES": ["iMendes", "IMendes"]}
+# Fontes públicas ou internas em aura.provider que não são terceiros a esconder.
+NAO_TERCEIROS = {"SYNC", "RECEITA", "CMED", "AITRUS", "FARMACIAPOPULAR", "GHS"}
+# Palavras, sobrenomes e lugares que também são nome de distribuidora: só com UF.
+COMUNS = {"TOTAL", "NOVA", "META", "REAL", "PRIME", "SMART", "MINAS", "GLORIA", "CRISTAL", "INFINITY",
+          "PONTUAL", "NORDESTE", "FORTES", "FERREIRA", "MARTINS", "OSASCO", "PRESCRITA", "MULTICANAL",
+          "PROSPER", "INVICTA", "VAREJAO", "SINERGIA", "MARKA", "ORIENTE", "GOYAZ", "TAPAJOS", "ANDORINHA",
+          "PARNAIBA", "MILLENIUM", "GENESIO", "SANTA RITA", "SANTARITA", "CRISTALIA", "ESTRELA", "ALIANCA",
+          "VALENTE", "ACÁCIA", "QUANTUM", "MANTIQUEIRA"}
+# Fabricantes que aparecem como grupo de distribuição (venda direta) e não estão em aura.provider:
+# no nome do produto são informação do produto; só com UF viram distribuidora mascarada.
+FABRICANTES = {"BAYER", "JOHSON", "JOHNSON", "ABBOTTNUTRI", "NOVAQUIMICA"}
+
+
+def consultar(script: Path, sql: str, *extra: str) -> list[str]:
+    r = subprocess.run([sys.executable, str(script), *extra, sql], capture_output=True, text=True, check=True)
+    linhas = [l.strip() for l in r.stdout.splitlines()[1:]]
+    return [l for l in linhas if l]
+
+
+def main() -> None:
+    grupos = consultar(CLICKHOUSE, "SELECT DISTINCT distribution_center_group FROM quote.distribution_center_group", "--max-rows", "5000")
+    distribuidoras = consultar(CLICKHOUSE, "SELECT DISTINCT distributor_name FROM analytics.quote_store_distribution_center", "--max-rows", "5000")
+    provedores = consultar(MYSQL, "SELECT name FROM aura.provider", "--limit", "1000")
+    fabricantes = ({p.upper() for p in provedores} - set(PLATAFORMAS) - NAO_TERCEIROS) | FABRICANTES
+    nomes = sorted({re.sub(r"\s+", " ", n.upper()) for n in grupos + distribuidoras if n})
+    junto = lambda n: re.sub(r"[^A-Z0-9]", "", n)
+    sozinho = [n for n in nomes if len(junto(n)) >= 5 and n not in COMUNS and junto(n) not in COMUNS
+               and not any(junto(n).startswith(f) or f.startswith(junto(n)) for f in fabricantes)]
+    plataformas = sorted({p for chave, grafias in PLATAFORMAS.items() for p in [chave, *grafias]})
+    saida = {
+        "$comentario": "Gerado por aura-novidades-terceiros a partir de produção; não editar à mão.",
+        "gerado_em": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "com_uf": nomes + [p for p in plataformas if p.upper() not in nomes],
+        "sozinho": sozinho,
+        "plataformas": plataformas,
+    }
+    destino = SKILL / "terceiros.json"
+    destino.write_text(json.dumps(saida, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    print(f"terceiros: {len(saida['com_uf'])} com UF, {len(sozinho)} sozinhos, {len(plataformas)} grafias de plataforma → {destino}")
+
+
+if __name__ == "__main__":
+    main()

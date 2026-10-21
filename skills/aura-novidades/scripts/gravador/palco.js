@@ -8,9 +8,9 @@
   const montar = () => {
     const estilo = document.createElement('style');
     estilo.textContent = `#aura-palco{position:fixed;inset:0;z-index:2147483600;pointer-events:none}
-#aura-palco .halo{position:absolute;border:2px solid #7c3aed;border-radius:8px;box-shadow:0 0 0 4px rgba(124,58,237,.18);opacity:0;transition:left 160ms ease,top 160ms ease,width 160ms ease,height 160ms ease,opacity 160ms ease}
+#aura-palco .halo{position:absolute;border:2px solid #316ab8;border-radius:10px;box-shadow:0 0 0 4px rgba(49,106,184,.18);opacity:0;transition:left 160ms ease,top 160ms ease,width 160ms ease,height 160ms ease,opacity 160ms ease}
 #aura-palco .halo[data-on="true"]{opacity:1}
-#aura-palco .clique{position:absolute;width:44px;height:44px;margin:-22px 0 0 -22px;border-radius:50%;border:3px solid #7c3aed;background:rgba(124,58,237,.18);animation:aura-clique 750ms ease-out forwards}
+#aura-palco .clique{position:absolute;width:44px;height:44px;margin:-22px 0 0 -22px;border-radius:50%;border:3px solid #316ab8;background:rgba(49,106,184,.18);animation:aura-clique 750ms ease-out forwards}
 @keyframes aura-clique{from{transform:scale(.8);opacity:1}40%{transform:scale(1.1);opacity:1}to{transform:scale(1.6);opacity:0}}`;
     document.head.appendChild(estilo);
     const raiz = document.createElement('div');
