@@ -62,13 +62,34 @@ class DownloadTests(unittest.TestCase):
             replay.SameOriginRedirect().redirect_request(request, None, 302, "", {}, "https://other.example/api/")
 
     def test_cli_busy_is_not_classified_as_login_failure_or_leaked(self):
-        client = replay.Client(HOST, 331102, "phx_fake", 1000, 10)
+        client = replay.Client(HOST, 331102, "phx_fake", 1000, 10, sleep=lambda _: None)
         failed = subprocess.CompletedProcess([], 1, "", "Status Code: 503\nprivate payload phx_fake")
         with patch.object(replay.subprocess, "run", return_value=failed):
             with self.assertRaisesRegex(replay.DownloadError, "HTTP 503; PostHog temporariamente ocupado") as caught:
                 client.cli("session-recording-get", {"id": SID})
             self.assertNotIn("phx_fake", str(caught.exception))
             self.assertNotIn("private payload", str(caught.exception))
+
+    def test_transient_read_retries_are_bounded_and_access_errors_are_not_retried(self):
+        sleeps = []
+        client = replay.Client(HOST, 331102, "phx_fake", 1000, 10, sleep=sleeps.append)
+        busy = subprocess.CompletedProcess([], 1, '', 'Status Code: 503')
+        success = subprocess.CompletedProcess([], 0, '{"id":331102}', '')
+        with patch.object(replay.subprocess, 'run', side_effect=[busy, busy, success]) as call:
+            self.assertEqual(client.cli('project-get', {})['id'], 331102)
+            self.assertEqual(call.call_count, 3)
+            self.assertEqual(sleeps, [2, 4])
+        denied = subprocess.CompletedProcess([], 1, '', 'Status Code: 403')
+        with patch.object(replay.subprocess, 'run', return_value=denied) as call:
+            with self.assertRaises(replay.DownloadError) as caught:
+                client.cli('project-get', {})
+            self.assertEqual(call.call_count, 1)
+            self.assertEqual(caught.exception.status, 403)
+            self.assertEqual(caught.exception.tool, 'project-get')
+        with patch.object(replay.subprocess, 'run', return_value=busy) as call:
+            with self.assertRaises(replay.DownloadError):
+                client.cli('unknown-or-write-tool', {})
+            self.assertEqual(call.call_count, 1)
 
     def test_sources_follow_pagination_and_reject_other_recording(self):
         client = replay.Client(HOST, 331102, "fake", 1000, 10)

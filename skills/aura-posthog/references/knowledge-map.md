@@ -52,6 +52,8 @@ o aura-ui identifica só com `userId` e traits sem PII.
 | `order_*` | Gestão de pedidos (poucos usuários) | `order_created`, `order_create_failed`, `order_status_changed` |
 | `campaign_*` | Campanhas (indústria, poucos usuários) | `campaign_created`, `campaign_create_failed` |
 | `login_*` | Login | `login_succeeded.login_method` (`token`, `cpf_password`), `login_failed.reason` |
+| `product_searched`, `quote_search_succeeded`, `purchase_context_resolved` | Comprar produto (`/quote`), verificado em 17/10/2026 | `product_searched` (`search_term`, `result_count`) é o **catálogo**: só sai na busca por texto/EAN; escolher do autocomplete ou recentes não emite. `quote_search_succeeded` (`ean_count`, `quoted_ean_count`, `unquoted_ean_count`) é a **cotação**: "não achou" com `result_count ≥ 1` e `quoted_ean_count = 0` = produto existe, sem preço ativo para a loja; conferir `quote.quote_current` (tombstone) e `quote.quote_run_task.outcome_code` |
+| `team_registry_*` | Cadastro da equipe (desde 25/09/2026) | `team_registry_modal_shown.pending_count`, `team_registry_opened.source` (`modal`, `banner`, `menu`), `team_registry_field_saved` (`field`, `status`, `self`). Verificado em 17/10/2026: `status` ignora o WhatsApp e nenhum evento leva o resultado; "preencheu" confirmar em `aura.user_team_profile` (MySQL). Usuário 803 "André Monteiro (teste)" é interno sem e-mail interno |
 
 Eventos do PostHog: `$pageview` (`$pathname`, `$referrer`), `$pageleave`, `$dead_click`, `$exception`, `$set`, `$identify`.
 
@@ -90,6 +92,20 @@ Validação (08–21/09/2026): `cart_checkout_succeeded` = 976 contra 910 carrin
   `$session_id`, `timestamp`, `level`, `message`). Filtrar `level = 'error'`, ignorar `ResizeObserver` e mensagens do
   próprio SDK. `query-session-recordings-list` dá `console_error_count` por sessão.
 - Sinal de perda: console registrou `[PostHog.js] This capture call is ignored due to client rate limiting`.
+
+## Lentidão: INP com atribuição e carrinho em todo evento (produção desde 21/10/2026 08:58, aura-ui #846/#847, versão `efdb7f0`)
+
+- `$web_vitals` com atribuição (`capture_performance.web_vitals_attribution`). **Não há propriedade própria**: a
+  atribuição fica dentro do objeto da métrica, `$web_vitals_<M>_event.attribution`. Para o INP:
+  `interactionTarget` (seletor do elemento), `interactionType`, `interactionTime`, `inputDelay`, `processingDuration`,
+  `presentationDelay`, `longestScript`, `totalScriptDuration`, `longAnimationFrameEntries`, `loadState`. Ler com
+  `JSONExtractRaw(JSONExtractRaw(properties, '$web_vitals_INP_event'), 'attribution')`. Versões anteriores não têm
+  `attribution`.
+- `cart_item_count` e `cart_bucket_count` (buckets = distribuidores/condições do carrinho, mesma contagem do
+  `cart_checkout_started`) em **todo** evento do Aura UI, inclusive `$web_vitals` e `$exception`. Ausentes antes de
+  o carrinho carregar na página (ausente ≠ 0).
+- Verificação 21/10/2026 ~09:10: 6 `$web_vitals` da `efdb7f0`, todos com as contagens; os de INP com `attribution`.
+  Não existe evento próprio de interação lenta ou tela travada (monitor Event Timing/LoAF avaliado e retirado).
 
 ## Instrumentação nova (produção desde 23/09/2026 08:04, aura-ui #645/#646, versão `3e000e0`)
 

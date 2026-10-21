@@ -33,20 +33,24 @@ Assistir ao trecho relevante, com antecedência e contexto após retry; anotar a
 
 ## Download e reprodução local
 
-Caminho padrão: `replay_lab.py` da skill `aura-posthog` (`references/replay-lab.md`). Com o `$session_id` e o
-horário do evento de erro, uma chamada baixa a sessão em lotes de 21 blocos para cache, reconstrói e entrega um
-laboratório local para o `agent-browser`: relógio relativo ao erro, `lab.ir`, `lab.tocar`, `lab.linha`,
-`lab.janela`, e aviso explícito quando não há gravação no instante do erro. Passar `--window-id` com o
-`$window_id` do evento quando houver várias janelas. Outro intervalo reaproveita o cache, sem requisição nova.
+Caminho único: `scripts/replay_investigate` da skill `aura-posthog`; seguir
+`references/replay-investigation.md` dessa skill. Runtime, dependências fixadas e fontes PostHog estão
+incluídos na skill, sem laboratório externo. Uma chamada `prepare --session <uuid> --name <nome>`
+revalida encerramento, baixa snapshots em lotes com cache e gera contexto paginado de eventos/erros,
+logs/traces disponíveis e vídeo integral indexado. Investigar e extrair snapshots desse mesmo pacote;
+a missão/contexto do problema para Gemini entram depois da preparação determinística.
 
-Alternativa para sessões inteiras ou amostras: `replay_download.py` (mesmos lotes e ritmo) e
-`replay_evidence.py frame --window-id <id>`, com tempo relativo àquela janela, não ao erro.
+O instante do erro usa o relógio do cliente (`properties.$time` × 1000), relativo ao início dos snapshots;
+não usar diretamente o timestamp corrigido pelo servidor. O `window_id_map` do manifesto liga o
+`$window_id` original à aba numérica de `--window`. Procurar eventos, extrair snapshots antes/durante/depois
+e conferir as imagens. Associação por horário/aba é aproximada; causa ou persistência exigem evidência própria.
 
-Catálogo CLI verificado em 08/10/2026: snapshots não expostos; metadados continuam pelo CLI, download usa exceção
-explícita GET na API de snapshots do PostHog. Não contornar acesso negado nem fazer fallback silencioso. A cota
-de snapshots é por personal key; 429 traz `Retry-After`: esperar, não trocar de chave.
+Abrir o painel com `replay_investigate serve`, loopback e portless. O agente pode usar `agent-browser`
+em sessão isolada de investigação e fecha somente sua sessão. Capturas vêm do vídeo já indexado; não
+reabrir/reconstruir o player para cada imagem. `annotate` salva observações e hipóteses referenciadas;
+`ticket` cria ZIP local com imagens, texto e JSON/hashes, sem publicar ou enviar.
 
-O agente investigador opera o laboratório ou o player diretamente, em sessão própria de `agent-browser`. Para
-conclusões sobre sequência, acompanhar o trecho antes/depois, pois um frame isolado não prova a transição. Ao
-concluir, fechar somente a sessão de browser criada para a investigação. Não versionar snapshots, HTML com DOM de
-clientes, frames ou credenciais no Context; incluir apenas scripts, testes e instruções.
+Catálogo CLI verificado em 08/10/2026: snapshots não expostos; metadados continuam pelo CLI. Download
+usa exceção explícita GET na API de snapshots. Não contornar acesso negado; em 429 respeitar Retry-After.
+Não usar exportação/scanner hospedado nem o laboratório/player anterior como outro caminho. Não versionar
+snapshots, DOM de clientes, vídeo, frames ou credenciais no Context.

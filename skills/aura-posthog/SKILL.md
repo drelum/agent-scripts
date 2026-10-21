@@ -1,6 +1,6 @@
 ---
 name: aura-posthog
-description: Analisar eventos, jornadas e erros do Aura no PostHog; acessar e baixar sessões gravadas, reconstruir a reprodução local e capturar frames no instante relevante. Usar para entender o que ocorreu numa sessão, investigar bloqueios no carrinho/checkout, comparar antes/depois de uma falha ou correlacionar a jornada com pedidos no ClickHouse. Descobrir eventos e propriedades a cada uso.
+description: Analisar eventos, jornadas e erros do Aura no PostHog; acessar e baixar sessões gravadas, reconstruir a reprodução local, avaliar vídeo/contexto com Gemini e capturar frames no instante relevante. Usar para entender o que ocorreu numa sessão, investigar bloqueios no carrinho/checkout, comparar antes/depois de uma falha ou correlacionar a jornada com pedidos no ClickHouse. Descobrir eventos e propriedades a cada uso.
 ---
 
 # Aura PostHog
@@ -15,6 +15,8 @@ ph=<skill>/scripts/aura-posthog   # <skill> = pasta deste SKILL.md
 ## Antes de começar
 
 1. Na primeira consulta ao PostHog da sessão, rodar `posthog-cli api --agent-help` (regra global do workspace).
+   **Teto de linhas:** `execute-sql` devolve no máximo 500 linhas (100 sem `LIMIT`), sem avisar. Resultado com
+   500 está cortado: paginar (`references/hogql.md`). `"$ph" sql` exige `LIMIT` e falha no teto.
 2. Descobrir o que existe agora, sem supor nomes:
 
 ```bash
@@ -53,16 +55,45 @@ gravações), ler `references/hogql.md` antes de montar consultas não triviais.
 
 ## Gravações
 
+Entrada única: `scripts/replay_investigate`. O runtime, lockfile e fontes PostHog verificadas estão
+incluídos em `scripts/replay_runtime/`; não precisa do laboratório nem de um clone OSS. Ler
+`references/replay-investigation.md` para `setup`, `doctor`, preparação, painel e evidências.
+Para pacote de sessão inteira ou lote recente, usar `prepare --session <uuid>` ou
+`prepare --latest <n> --name <prefixo>`. Prepara deterministicamente contexto paginado e MP4 integral
+disponível; a pergunta, o problema e a análise Gemini entram somente depois, reutilizando esse pacote.
+O renderer lê o dataset uma vez e captura até dois blocos em paralelo, com páginas isoladas, ordem
+temporal validada e tempos internos no manifesto; mantém FPS, inatividade e snapshots do mesmo MP4.
+Intervalos sem gravação entre abas recebem cartões explícitos e cobertura parcial no manifesto;
+não são telas do usuário nem evidência de frustração. Corrupção/falha do renderer continuam rejeitadas.
+Pilotos e lotes usam sessões encerradas (`ongoing: false`) por padrão; selecionar e revalidar conforme
+`references/replay-download.md`. Sessões abertas só entram quando o pedido exigir isso explicitamente.
+
 | Objetivo | Caminho | Referência |
 |---|---|---|
-| Investigar um erro com sessão e horário | `scripts/replay_lab.py <sessão> --at <horário>`: baixa em lotes para cache e monta o laboratório (`window.lab`) para `agent-browser` | `references/replay-lab.md` |
+| Avaliar sessão, frustração ou objetivo não atingido | `prepare` → `analyze` com Gemini → conferir snapshots/eventos → priorizar → `annotate/ticket` | `references/replay-investigation.md` |
 | Acesso, login, localizar sessões | `posthog-cli api` (metadados) | `references/replay-download.md` |
-| Sessões inteiras para amostra de jornadas | `scripts/replay_download.py` + `scripts/replay_evidence.py analyze` | `references/replay-download.md`, `references/replay-analysis.md` |
+| Somente preparar pacote ou lote | `prepare`: contexto, MP4 integral, índice e cobertura; ainda sem análise Gemini | `references/replay-investigation.md` |
 
 O download usa a API de snapshots, ausente no catálogo do CLI verificado; essa exceção GET é explícita, não
-fallback silencioso. Na investigação de replays históricos, o agente usa a CLI global `agent-browser`
-diretamente, em sessão própria com prefixo `replay-`, sem exigir `visual-inspection`; fecha somente essa sessão.
-Sem conferência das imagens, declarar a análise como estrutural.
+fallback silencioso. **O script produz o vídeo**, com Puppeteer + `chrome-headless-shell` + FFmpeg;
+**Gemini avalia vídeo e contexto**; **o agente confere as evidências e prioriza o impacto**.
+`agent-browser` não participa da geração nem é pré-requisito da análise. Para inspeção manual adicional
+no painel de replays históricos, o agente pode usar a CLI global
+`agent-browser` em sessão isolada `replay-`; fecha somente essa sessão. Sem conferir as imagens,
+declarar a análise como estrutural. QA de desenvolvimento do painel exige `visual-inspection`.
+
+Os scripts `replay_download.py` e `replay_evidence.py` fornecem transporte, sanitização e análise estrutural
+ao runtime. Seus comandos anteriores e `replay_lab.py`/JS permanecem históricos; não usá-los como outro
+fluxo de investigação. `prepare` não chama LLM. Pedido de avaliar sessões/frustração inclui executar
+`analyze`; pedido apenas de download/preparação não inclui essa etapa. Se Gemini não rodou, declarar
+"pacote preparado; análise Gemini pendente", sem apresentar triagem estrutural como avaliação concluída.
+Tickets continuam locais.
+
+Para avaliação por Gemini, usar `analyze <pacote> --mission <arquivo> --name <análise>`, depois de `prepare`.
+Ler **Analisar com Gemini** em `references/replay-investigation.md`: credencial Infisical, fontes dos
+prompts, limites e referências. A missão/problema são variáveis; o vídeo/contexto já preparados são
+reutilizados. O executor aplica limitações, valida IDs/timestamps, extrai snapshots numa passagem e
+marca o resultado como pendente de conferência visual. Não tratar resposta do modelo como fato validado.
 
 ## Relatar
 

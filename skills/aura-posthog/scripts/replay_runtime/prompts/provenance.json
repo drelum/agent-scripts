@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/PostHog/posthog",
+  "commit": "f65db4f579d795aab05b8eb01671e5e2ba6a9d05",
+  "source_prefix": "products/replay_vision/backend/temporal/scanners/prompts/",
+  "sha256": {
+    "preamble.jinja": "57ee52492da965407615c2d9430d49b790fdfd1df2de91c02611494b84ab2c5a",
+    "_macros.jinja": "cd8a9ea7065c57ae4f3b95c00e7b398779a8a813c5eb2240735aa75385c54799",
+    "lookups_step.jinja": "de0a0f068b61e9d8f17e0b13a87eb89a7ce10dc96ae810ce6b5ce48690e95afd",
+    "summarizer_summary_step.jinja": "d13698d3174fa688afc9e45e22acd7a7f0fff7fd8946cbbd044464e13a095fc9"
+  }
+}

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+scripts_dir="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$scripts_dir/replay_runtime/investigate.py" "$@"

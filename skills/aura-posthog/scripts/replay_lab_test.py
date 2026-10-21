@@ -207,6 +207,7 @@ class ReplayLabTests(unittest.TestCase):
             html = Path(result["lab"]).read_text()
             manifest = json.loads(Path(result["lab"]).with_suffix(".json").read_text())
             modes = {p.name: stat.S_IMODE(p.stat().st_mode) for p in folder.iterdir()}
+            cache_mode = stat.S_IMODE((folder.parent / ".lotes").stat().st_mode)
             again = lab.preparar(FakeClient(), SID, at, Path(root), assets=fake_assets)
             with self.assertRaisesRegex(rd.DownloadError, "outra janela"):
                 lab.preparar(FakeClient(), SID, at, Path(root), wanted="w1", assets=fake_assets)
@@ -217,8 +218,8 @@ class ReplayLabTests(unittest.TestCase):
         self.assertEqual(manifest["requisicoes_snapshots"], 2)
         self.assertEqual(manifest["janelas"]["w1"]["inicio_s"], -200.0)
         self.assertEqual((again["reutilizado"], again["requisicoes_snapshots"]), (True, 0))
-        self.assertEqual(modes, {".lotes": 0o700, "lab_T-300_T+120.json": 0o600, "lab_T-300_T+120.html": 0o600,
-                                 "LEIA-ME.md": 0o600})
+        self.assertEqual(modes, {"lab_T-300_T+120.json": 0o600, "lab_T-300_T+120.html": 0o600, "LEIA-ME.md": 0o600})
+        self.assertEqual(cache_mode, 0o700)
 
     def test_errors_in_same_second_get_distinct_labs(self):
         at = T0 + 20 * BLOCK_MS
@@ -227,6 +228,15 @@ class ReplayLabTests(unittest.TestCase):
             second = lab.preparar(FakeClient(blocks=30), SID, at + 999, Path(root), assets=fake_assets)
         self.assertNotEqual(first["lab"], second["lab"])
         self.assertFalse(second["reutilizado"])
+
+    def test_other_error_in_same_session_reuses_cache(self):
+        with tempfile.TemporaryDirectory() as root:
+            first = FakeClient(blocks=45, base_blocks=(0, 30))
+            lab.preparar(first, SID, T0 + 40 * BLOCK_MS, Path(root), assets=fake_assets)
+            second = FakeClient(blocks=45, base_blocks=(0, 30))
+            result = lab.preparar(second, SID, T0 + 42 * BLOCK_MS, Path(root), assets=fake_assets)
+        self.assertEqual((first.requests, second.requests), (3, 0))
+        self.assertEqual(Path(result["lab"]).parent.parent.name, SID)
 
     def test_new_interval_reuses_cache_without_requests(self):
         at = T0 + 40 * BLOCK_MS

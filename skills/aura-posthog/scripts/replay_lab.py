@@ -260,8 +260,10 @@ def preparar(client, session, at_ms, output, modo=Modo.INTEIRA, wanted=None, de_
     session = str(uuid.UUID(session))
     if not de_s < ate_s or ate_s - de_s > 3600:
         raise rd.DownloadError("Intervalo inválido: --de menor que --ate e no máximo 3600 s.")
-    # Milissegundos no nome: dois erros no mesmo segundo não podem compartilhar o relógio do laboratório.
-    destination = output / f"{session}-{datetime.fromtimestamp(at_ms / 1000, SP):%Y%m%d-%H%M%S}{at_ms % 1000:03d}"
+    # Cache por sessão (outro erro da mesma sessão não baixa de novo); laboratório por instante, com milissegundos:
+    # dois erros no mesmo segundo não podem compartilhar o relógio.
+    cache = output / session / ".lotes"
+    destination = output / session / f"{datetime.fromtimestamp(at_ms / 1000, SP):%Y%m%d-%H%M%S}{at_ms % 1000:03d}"
     lab = destination / (nome_lab(de_s, ate_s) + ".html")
     browser = "replay-" + session[:8]
     if lab.exists():
@@ -277,8 +279,8 @@ def preparar(client, session, at_ms, output, modo=Modo.INTEIRA, wanted=None, de_
         raise rd.DownloadError("Gravação não encontrada; verificar retenção/permissão.")
     if metadata.get("snapshot_source") not in (None, "web"):
         raise rd.DownloadError("Este leitor reconstrói gravações web; fonte não suportada.")
-    cache = destination / ".lotes"
     cache.mkdir(mode=0o700, parents=True, exist_ok=True)
+    destination.mkdir(mode=0o700, exist_ok=True)
     de_ms, ate_ms = at_ms + de_s * 1000, at_ms + ate_s * 1000
     sources, windows, stats, fetched, janela, criterio = coletar(
         client, session, at_ms, modo, wanted, cache, ate_ms, reuse_sources=metadata.get("ongoing") is False,
@@ -312,7 +314,10 @@ def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("session_id")
-    parser.add_argument("--at", required=True, help="Horário do erro: ISO 8601 (sem fuso = São Paulo) ou epoch ms")
+    parser.add_argument("--at", required=True,
+                        help="Horário do erro no relógio do cliente: `properties.$time` do evento × 1000 (epoch ms). "
+                             "O `timestamp` do evento é corrigido pelo servidor e pode diferir minutos da gravação. "
+                             "Também aceita ISO 8601 (sem fuso = São Paulo).")
     parser.add_argument("--output", type=Path, required=True, help="Pasta privada, fora do Git")
     parser.add_argument("--de", type=int, default=DE_S, help=f"Início do laboratório, s relativos ao erro (padrão {DE_S})")
     parser.add_argument("--ate", type=int, default=ATE_S, help=f"Fim do laboratório, s relativos ao erro (padrão {ATE_S})")

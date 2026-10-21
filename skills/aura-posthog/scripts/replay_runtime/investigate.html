@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Sessões · investigação local</title>
+    <style>
+      :root {
+        --ink: #15292b;
+        --paper: #f2efe6;
+        --accent: #edc65a;
+        --muted: #b8cbc6;
+        --line: #54716e;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        color: var(--paper);
+        font:
+          15px Georgia,
+          serif;
+        background: var(--ink);
+        background-image: radial-gradient(ellipse at top left, #385b5870, transparent 65%);
+      }
+      header {
+        padding: 22px 28px 16px;
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        border-bottom: 1px solid var(--line);
+      }
+      h1 {
+        font-weight: 400;
+        font-size: 30px;
+        margin: 6px 0 0;
+      }
+      .eyebrow {
+        color: var(--accent);
+        font:
+          12px "Courier New",
+          monospace;
+        letter-spacing: 0.14em;
+      }
+      main {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 350px;
+        gap: 24px;
+        padding: 20px 28px;
+      }
+      section,
+      aside {
+        min-width: 0;
+      }
+      aside {
+        border-left: 1px solid var(--line);
+        padding-left: 22px;
+      }
+      button,
+      input,
+      select {
+        font:
+          14px Georgia,
+          serif;
+        padding: 9px;
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        background: #213b3c;
+        color: var(--paper);
+      }
+      button {
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: var(--accent);
+      }
+      :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+      }
+      label {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .tools {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+        margin: 10px 0;
+      }
+      video {
+        width: 100%;
+        height: 380px;
+        display: block;
+        background: #0b1718;
+        border: 1px solid var(--line);
+      }
+      #clock {
+        color: var(--accent);
+        font:
+          13px "Courier New",
+          monospace;
+        padding: 12px 0;
+      }
+      #session-time {
+        width: 110px;
+      }
+      #search {
+        width: 100%;
+        margin-top: 10px;
+      }
+      #events {
+        display: grid;
+        gap: 6px;
+        max-height: 235px;
+        overflow: auto;
+        margin: 12px 0;
+      }
+      .event {
+        text-align: left;
+        line-height: 1.4;
+        font-size: 13px;
+      }
+      h2 {
+        font-size: 21px;
+        font-weight: 400;
+        margin: 0 0 10px;
+      }
+      h3 {
+        font-size: 17px;
+        font-weight: 400;
+        margin-top: 20px;
+      }
+      .muted,
+      #matches,
+      #limits {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      #context {
+        font-size: 13px;
+        line-height: 1.55;
+        max-height: 200px;
+        overflow: auto;
+        border-top: 1px solid var(--line);
+        padding-top: 8px;
+      }
+      #notice {
+        min-height: 25px;
+        color: var(--accent);
+        font-size: 14px;
+      }
+      #title {
+        flex: 1;
+        min-width: 150px;
+      }
+      #attachments {
+        display: grid;
+        gap: 10px;
+        margin: 12px 0;
+      }
+      a {
+        color: var(--accent);
+      }
+      details {
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+      }
+      pre {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font:
+          12px "Courier New",
+          monospace;
+        max-height: 230px;
+        overflow: auto;
+      }
+      summary {
+        cursor: pointer;
+      }
+      @media (max-width: 900px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+        aside {
+          border-left: 0;
+          padding-left: 0;
+        }
+        video {
+          height: 330px;
+        }
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        main {
+          animation: appear 0.25s ease-out;
+        }
+        @keyframes appear {
+          from {
+            opacity: 0;
+            transform: translateY(4px);
+          }
+          to {
+            opacity: 1;
+            transform: none;
+          }
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <div class="eyebrow">AURA / EVIDÊNCIAS LOCAIS</div>
+        <h1>Investigar uma sessão</h1>
+      </div>
+      <label
+        >Pacote
+        <select id="bundles" aria-label="Pacote"></select
+      ></label>
+    </header>
+    <main>
+      <section>
+        <video id="video" controls preload="metadata" aria-label="Vídeo da sessão"></video>
+        <div id="clock">Carregando…</div>
+        <div class="tools">
+          <button id="back">← Frame</button><button id="next">Frame →</button
+          ><label
+            >Instante da sessão (s) <input id="session-time" type="number" step="0.001" /></label
+          ><button id="go">Ir</button>
+        </div>
+        <div class="tools">
+          <button id="snapshot">Extrair snapshot</button
+          ><input id="title" aria-label="Título do ticket" placeholder="Título do ticket" /><button
+            id="ticket"
+          >
+            Preparar ticket
+          </button>
+        </div>
+        <div id="notice" role="status" aria-live="polite">Carregando pacote local…</div>
+        <div id="attachments"></div>
+        <details>
+          <summary>Texto e referências do ticket</summary>
+          <pre id="ticket-text"></pre>
+        </details>
+        <details style="margin-top: 14px">
+          <summary>Limites da evidência</summary>
+          <p id="limits"></p>
+        </details>
+      </section>
+      <aside>
+        <h2>O que aconteceu?</h2>
+        <p class="muted">
+          Busque uma ação ou erro. Abra o evento para conferir a imagem e o contexto relacionado.
+        </p>
+        <input
+          id="search"
+          type="search"
+          aria-label="Buscar eventos"
+          placeholder="Erro, carrinho, confirmar…"
+        />
+        <p id="matches"></p>
+        <div id="events"></div>
+        <h3>Observações com evidência</h3>
+        <div id="findings"></div>
+        <h3>Contexto relacionado</h3>
+        <div id="context">Selecione um evento na linha do tempo.</div>
+      </aside>
+    </main>
+    <script src="/investigator.js" defer></script>
+  </body>
+</html>

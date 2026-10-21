@@ -1,0 +1,15 @@
+{
+  "entry": [
+    "export.mjs",
+    "core.ts",
+    "player.ts",
+    "headless.ts",
+    "investigator.ts",
+    "vendor/posthog/replay-shared/src/index.ts"
+  ],
+  "project": ["*.ts", "*.mjs", "*.cjs", "vendor/posthog/**/*.ts"],
+  "vite": { "config": ["vite.config.ts"] },
+  "ignoreBinaries": ["ffmpeg", "ffprobe"],
+  "ignoreDependencies": ["vite"],
+  "paths": { "@posthog/replay-shared": ["./vendor/posthog/replay-shared/src/index.ts"] }
+}

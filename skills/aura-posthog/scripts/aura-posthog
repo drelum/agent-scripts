@@ -70,7 +70,16 @@ def sql_literal(value: str) -> str:
 
 
 def cmd_sql(args: argparse.Namespace) -> None:
-    emit(run_sql(read_sql(args.file)))
+    sql = read_sql(args.file)
+    # O execute-sql corta em 100 linhas sem LIMIT e em 500 com qualquer LIMIT, sem avisar
+    # (references/hogql.md). HogQL livre: LIMIT explícito e falha no teto, para nunca decidir com dado cortado.
+    if not re.search(r"\bLIMIT\s+\d+(\s+OFFSET\s+\d+)?\s*;?\s*$", sql, re.IGNORECASE):
+        raise SystemExit(f"aura-posthog: inclua LIMIT (até {MAX_ROWS}) no fim da consulta; sem ele o PostHog devolve só 100 linhas.")
+    rows = run_sql(sql)
+    emit(rows)
+    if len(rows) - 1 >= MAX_ROWS:
+        print(f"aura-posthog: resultado no teto de {MAX_ROWS} linhas: está cortado; pagine (references/hogql.md).", file=sys.stderr)
+        raise SystemExit(3)
 
 
 def cmd_events(args: argparse.Namespace) -> None:

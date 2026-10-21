@@ -4,8 +4,13 @@ Ler antes de montar consultas não triviais. Verificado em 23/09/2026 com chave 
 
 ## Limites
 
-- `execute-sql` devolve **no máximo 500 linhas**. Para mais, paginar por chave: `ORDER BY <chave> LIMIT 500`
-  e, na próxima chamada, `AND <chave> > '<última>'`.
+- `execute-sql` devolve **no máximo 500 linhas**, mesmo com `LIMIT` maior (`LIMIT 50000` também para em
+  500). **Sem `LIMIT`, só 100.** Remedido em 19/10/2026: `numbers(500)` sem `LIMIT` → 100; `numbers(3000)
+  LIMIT 50000` → 500. Resultado com exatamente 100 ou 500 linhas está cortado, sem aviso do PostHog.
+- Para mais, paginar por chave: `ORDER BY <chave> LIMIT 500` e, na próxima chamada, `AND <chave> > '<última>'`;
+  por instante: `timestamp >= <último>` com `ORDER BY timestamp, uuid` e descartar `uuid` repetido; ou dividir a
+  lista do `IN` em lotes e repartir o lote que voltar com 500.
+- `"$ph" sql` exige `LIMIT` no fim e sai com erro (código 3) quando o resultado chega ao teto.
 - **`OFFSET` não é aceito** com chave pessoal.
 - Alias de `SELECT` nem sempre resolve em `GROUP BY` com expressões longas: declare `expr AS nome` no `SELECT`
   e agrupe por `nome`.

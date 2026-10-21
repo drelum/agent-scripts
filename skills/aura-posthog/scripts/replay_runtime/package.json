@@ -1,0 +1,25 @@
+{
+  "name": "aura-posthog-replay",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "vp check",
+    "test": "node --test --test-concurrency=3 core.test.cjs capture-proof.test.mjs capture-batch.test.mjs video-time.test.mjs vendor-proof.test.mjs && private/analysis-venv/bin/python -m unittest lab_test.py bundles_test.py investigate_test.py runtime_test.py preparation_test.py analysis_test.py recording_coverage_test.py replay_context_test.py -v",
+    "build": "node build.mjs",
+    "gate": "npm run build && npm run check && npm test && knip --no-progress --no-gitignore"
+  },
+  "dependencies": {
+    "esbuild": "0.28.2",
+    "fflate": "0.8.3",
+    "fzstd": "0.1.1",
+    "hls.js": "1.5.7",
+    "posthog-js": "1.438.4",
+    "puppeteer-capture": "1.58.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "knip": "6.41.0",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
+    "vite-plus": "1.1.0"
+  }
+}

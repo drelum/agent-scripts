@@ -1,0 +1,19 @@
+{
+  "verified_at": "2026-10-16",
+  "sources": [
+    "Sentinel docs/posthog-comportamento-2026-10-07.md; useCartActivationTracking",
+    "aura-posthog references/knowledge-map.md; cobertura datada"
+  ],
+  "product_context": "Aura: busca e comparação de produtos/ofertas, seleção de condições e quantidades, adição ao carrinho, revisão e envio de pedidos. Priorizar bloqueios de compra e envio. Identificar tentativas, resultado observado, repetição e recuperação separadamente. Fim da gravação não comprova abandono. Persistência, processamento ou entrega do pedido exigem fonte de negócio independente.",
+  "events": {
+    "cart_checkout_started": "Ativação do carrinho na transição de zero para um ou mais itens. Não é clique de envio nem tentativa de finalizar. Carrinho preexistente pode não emitir este evento.",
+    "cart_item_added": "Frontend registrou adição ao carrinho; distinguir de tentativa e falha. Não comprova pedido enviado nem persistência independente.",
+    "cart_item_add_failed": "Falha instrumentada na adição ao carrinho; consultar reason/http_status e a recuperação posterior. Repetições não são incidentes distintos automaticamente.",
+    "cart_checkout_succeeded": "Frontend registrou resposta tratada como sucesso de checkout; pode incluir HTTP 207. Não prova sucesso de todos os itens, entrega ao distribuidor, faturamento ou persistência independente.",
+    "cart_checkout_failed": "Falha instrumentada no checkout; verificar motivo, HTTP e recuperação. Não comprova ausência de itens já persistidos.",
+    "order_create_failed": "Falha instrumentada ao criar pedido; propriedades e cobertura variam por release. Não inferir causa se motivo estiver ausente.",
+    "$exception": "Exceção capturada; pode ser tratada e não visível ao usuário. Consultar stack e contexto antes de atribuir impacto.",
+    "$rageclick": "Cliques rápidos repetidos detectados pelo SDK; não comprova falha do controle nem emoção.",
+    "$dead_click": "Clique sem mudança detectada pelo SDK; sinal para investigar resposta, contexto e repetição, não prova isolada de bloqueio."
+  }
+}

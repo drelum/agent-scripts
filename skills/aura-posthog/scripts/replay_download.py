@@ -32,7 +32,10 @@ SECRET_TEXT = re.compile(r"(?i)(?:phx_[\w-]+|eyJ[\w-]+\.[\w-]+\.[\w-]+|Bearer\s+
 
 
 class DownloadError(Exception):
-    pass
+    def __init__(self, message, *, status=None, tool=None, retryable=False, retry_after=0):
+        super().__init__(message)
+        self.status, self.tool = status, tool
+        self.retryable, self.retry_after = retryable, retry_after
 
 
 def origin(value):
@@ -103,47 +106,79 @@ class Client:
         self.limit = self.clock() + PRAZO_S
 
     def get(self, path):
+        deadline = min(self.limit, self.clock() + 120)
+        return self.retry_read(lambda: self._get_once(path, deadline), deadline)
+
+    def retry_read(self, read, deadline):
+        for attempt in range(3):
+            # A 1ª tentativa deixa a leitura acusar o prazo da sessão ("excedeu"), que não se resolve repetindo.
+            if attempt and self.clock() >= deadline:
+                raise DownloadError('Prazo da leitura esgotado; repetir explicitamente após diagnóstico.')
+            try:
+                return read()
+            except DownloadError as error:
+                wait = max(2 ** (attempt + 1), error.retry_after)
+                if not error.retryable or attempt == 2 or wait > 60 or self.clock() + wait >= deadline:
+                    raise
+                self.sleep(wait)
+
+    def _get_once(self, path, deadline):
         if self.last is not None:
             self.sleep(max(0.0, self.last + RITMO_S - self.clock()))
-        if self.clock() >= self.limit:
+        if self.clock() >= min(self.limit, deadline):
             raise DownloadError(f"Download excedeu {PRAZO_S // 60} minutos; saída incompleta.")
         self.requests += 1
         request = urllib.request.Request(self.host + path, headers={"Authorization": "Bearer " + self.token})
         try:
-            with self.opener.open(request, timeout=40) as response:
+            with self.opener.open(request, timeout=min(40, deadline - self.clock())) as response:
                 body = read_bounded(response, min(MAX_RESPONSE, self.max_bytes - self.downloaded))
         except urllib.error.HTTPError as exc:
             action = {401: "renovar login", 403: "conferir session_recording:read/projeto",
                       404: "gravação ausente ou fora da retenção", 429: "limite de requisições; repetir depois"}
             retry = exc.headers.get("Retry-After", "") if exc.code == 429 and exc.headers else ""
             wait = f" Retry-After: {retry} s." if retry.isdigit() else ""
-            raise DownloadError(f"Snapshots: HTTP {exc.code}; {action.get(exc.code, 'leitura falhou')}.{wait}") from None
+            raise DownloadError(f"Snapshots: HTTP {exc.code}; {action.get(exc.code, 'leitura falhou')}.{wait}",
+                status=exc.code, tool='snapshots-get', retryable=exc.code in (429, 500, 502, 503, 504),
+                retry_after=int(retry) if retry.isdigit() else 0) from None
         except (urllib.error.URLError, TimeoutError):
-            raise DownloadError("Snapshots: rede/timeout; download não concluído.") from None
+            raise DownloadError("Snapshots: rede/timeout; download não concluído.", tool='snapshots-get', retryable=True) from None
         finally:
             self.last = self.clock()
         self.downloaded += len(body)
         return body
 
     def cli(self, tool, payload):
+        # Apenas ferramentas de leitura usadas por este pipeline; nenhuma operação mutável é repetida.
+        allowed = {'query-session-recordings-list', 'session-recording-get', 'project-get',
+                   'execute-sql', 'read-data-schema', 'logs-count', 'query-logs',
+                   'logs-attributes-list', 'logs-attribute-values-list'}
+        if tool not in allowed:
+            return self._cli_once(tool, payload)
+        deadline = self.clock() + 120
+        return self.retry_read(lambda: self._cli_once(tool, payload, max(1, min(90, deadline - self.clock()))), deadline)
+
+    def _cli_once(self, tool, payload, timeout=90):
         env = dict(os.environ, POSTHOG_CLI_API_KEY=self.token, POSTHOG_CLI_PROJECT_ID=str(self.project), POSTHOG_CLI_HOST=self.host)
         try:
             result = subprocess.run(["posthog-cli", "--host", self.host, "api", "call", "--json", tool,
-                                     json.dumps(payload)], env=env, capture_output=True, text=True, timeout=90)
+                                     json.dumps(payload)], env=env, capture_output=True, text=True, timeout=timeout)
             if result.returncode:
                 code = re.search(r"Status Code:\s*(\d{3})", result.stderr + result.stdout)
                 if code:
                     status = int(code[1])
                     action = {401: "renovar login", 403: "conferir escopo/projeto",
                               429: "limite de requisições", 503: "PostHog temporariamente ocupado"}
-                    raise DownloadError(f"CLI: HTTP {status}; {action.get(status, 'leitura falhou')}. Conteúdo privado omitido.")
-                raise DownloadError("CLI: leitura falhou; saída privada omitida.")
+                    raise DownloadError(f"CLI {tool}: HTTP {status}; {action.get(status, 'leitura falhou')}. Conteúdo privado omitido.",
+                        status=status, tool=tool, retryable=status in (429, 500, 502, 503, 504))
+                raise DownloadError(f"CLI {tool}: leitura falhou; saída privada omitida.", tool=tool)
             data = json.loads(result.stdout)
             if not isinstance(data, dict) or data.get("isError") or data.get("error"):
                 raise DownloadError("CLI retornou erro; conteúdo privado omitido.")
             return data
-        except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
-            raise DownloadError("CLI ausente, resposta inválida ou timeout; conferir posthog-cli api.") from None
+        except subprocess.TimeoutExpired:
+            raise DownloadError(f"CLI {tool}: timeout; leitura não concluída.", tool=tool, retryable=True) from None
+        except (FileNotFoundError, ValueError):
+            raise DownloadError(f"CLI {tool}: ausente ou resposta inválida; conferir posthog-cli api.", tool=tool) from None
 
     def sources(self, session):
         base = f"/api/environments/{self.project}/session_recordings/{session}/snapshots"
