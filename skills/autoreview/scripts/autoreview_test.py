@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -842,6 +843,45 @@ class EngineAndReportCase(unittest.TestCase):
             reviewer_env(source),
             {"HOME": "/home/reviewer", "PATH": "/usr/bin", "LANG": "C.UTF-8"},
         )
+
+    def test_codex_tool_path_round_trips_through_toml(self) -> None:
+        paths = ('/opt/ferramentas com espaço/ação 🚀:/tmp/"quoted"/back\\slash:/usr/bin', "")
+        for path in paths:
+            with self.subTest(path=path), patch.dict(os.environ, {"PATH": path}, clear=True):
+                command = codex_command(Path("/repo"), Path("schema.json"), Path("result.json"), None)
+                config = tomllib.loads("\n".join(
+                    command[index + 1] for index, value in enumerate(command) if value == "--config"
+                ))
+                self.assertEqual(config["shell_environment_policy"], {
+                    "inherit": "none", "set": {"PATH": path},
+                })
+
+    def test_codex_does_not_invent_a_missing_path(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            command = codex_command(Path("/repo"), Path("schema.json"), Path("result.json"), None)
+        self.assertFalse(any(value.startswith("shell_environment_policy.set.") for value in command))
+
+    def test_codex_tool_path_resolves_caller_tools_without_credentials(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="autoreview-path-") as directory:
+            tool = Path(directory) / "reviewer-path-probe"
+            tool.write_text("#!/bin/sh\nprintf 'caller-tool-ok\\n'\n", encoding="utf-8")
+            tool.chmod(0o700)
+            path = directory + os.pathsep + os.environ["PATH"]
+            with patch.dict(os.environ, {"PATH": path, "AUTOREVIEW_TEST_SECRET": "synthetic"}):
+                command = codex_command(Path("/repo"), Path("schema.json"), Path("result.json"), None)
+                config = tomllib.loads("\n".join(
+                    command[index + 1] for index, value in enumerate(command) if value == "--config"
+                ))
+                policy = config["shell_environment_policy"]
+                self.assertEqual(policy["inherit"], "none")
+                result = subprocess.run(
+                    ["/bin/bash", "--noprofile", "--norc", "-c",
+                     "set -eu; reviewer-path-probe; "
+                     "for tool in cat sed git; do command -v \"$tool\" >/dev/null; done; "
+                     "test -z \"${AUTOREVIEW_TEST_SECRET+x}\""],
+                    env=policy["set"], text=True, capture_output=True, check=True,
+                )
+            self.assertEqual(result.stdout, "caller-tool-ok\n")
 
     def test_codex_command_accepts_an_explicit_model_override(self) -> None:
         command = codex_command(

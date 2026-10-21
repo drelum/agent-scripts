@@ -7,6 +7,7 @@ description: "Run an isolated, structured code review with Codex or Claude befor
 
 Run an independent source-aware review. Treat findings as advisory; verify every finding against the real code path before changing anything.
 
+
 ## Workflow
 
 Resolve `<skill-dir>` as the directory containing this `SKILL.md`, regardless of the current repository.
@@ -76,7 +77,7 @@ Explicit targets:
 
 ## Isolation Contract
 
-- Codex: ephemeral execution in the native read-only sandbox, with repository and EVE snapshot readable, empty tool-shell environment, project instructions disabled, user config and exec rules ignored; web search is enabled only for an Eve review without a local EVE snapshot.
+- Codex: ephemeral execution in the native read-only sandbox, with repository and EVE snapshot readable, ambient tool-shell environment inheritance disabled and the caller's complete PATH explicitly preserved for executable discovery, project instructions disabled, user config and exec rules ignored; web search is enabled only for an Eve review without a local EVE snapshot.
 - Codex default reviewer: `gpt-6.1-sol` with reasoning effort `high`; an explicit `--model` overrides the model.
 - Codex Fast: enabled by default through `fast_mode` and `service_tier="fast"`, independently of caller settings. `--fast` remains accepted for compatibility.
 - Claude: print mode, safe mode, user setting source only, checkout- and EVE-snapshot-scoped reads without secret-path denials; `WebFetch` is restricted to `eve.dev` only for an Eve review without a snapshot; shell, writes, open web search, and MCP remain disabled.

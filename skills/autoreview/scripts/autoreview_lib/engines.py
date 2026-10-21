@@ -387,6 +387,12 @@ def codex_command(
         "--output-last-message",
         str(output_file),
     ])
+    if "PATH" in os.environ:
+        command.extend([
+            "--config",
+            "shell_environment_policy.set.PATH="
+            + json.dumps(os.environ["PATH"], ensure_ascii=False),
+        ])
     if fast:
         command.extend(["--enable", "fast_mode", "--config", 'service_tier="fast"'])
     command.append("-")
