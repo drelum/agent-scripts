@@ -19,7 +19,7 @@ incidente não deve virar causa presumida no próximo.
   grupo, embalagem e saldo físico versus trânsito. Custo exige a mesma base unitária.
 - Relato/print do ERP é evidência naquele contexto e horário, não uma leitura ao
   vivo do banco. Ler os anexos necessários; mensagens usam `wacli`. Browser QA
-  segue `aura-beta-browser` e `visual-inspection`, quando realmente necessário.
+  segue `visual-inspection`, quando realmente necessário.
 
 ## Rastrear por etapa
 

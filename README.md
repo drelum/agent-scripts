@@ -79,7 +79,7 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 - `aura-incident-investigation`: investigação somente leitura de frontend, backend, cotação e Sync; correlaciona logs, eventos/sessões PostHog e dados persistidos, prioriza impacto e prepara diagnósticos/tickets. Usa `aura-posthog` para download, reprodução e frames; inclui onboarding e auxiliares de acesso portáteis.
 - `aura-store-data-diagnosis`: diagnóstico somente leitura de divergências de estoque, vendas e custo do ERP; rastreia aquisição, transformação, bases, API e tela, com identidade e horários comparáveis.
 - `aura-posthog`: análise somente leitura do uso do Aura no PostHog (navegação, carrinho, envio de pedido e erros), com descoberta de eventos a cada uso, resolução de e-mail pelo cadastro Aura e mascaramento de tokens; executor em `skills/aura-posthog/scripts/aura-posthog`.
-- `aura-beta-promotion`: prepara e valida promoções do monorepo Beta para as branches oficiais `beta` do Aura e Aura UI, com snapshot subtree, autorização final, monitoramento do provedor e smoke funcional.
+- Desabilitadas (`.disabled`, fora da publicação): `aura-beta-promotion`, `aura-beta-browser` e `aura-novidades` (monorepo Beta); `behavior-validator`.
 - `aura-packaging`: diagnostica empacotamento de um EAN (cotação, NF, venda, custo) via script somente leitura; CNPJ padrão `05101867000157`.
 - `autoreview`: revisão source-aware isolada com Codex ou Claude; aceita segredos e caminhos sensíveis no bundle/repositório, sem herdar credenciais do ambiente; valida a resposta estruturada internamente e entrega relatório Markdown; Codex usa `gpt-6.1-sol` com reasoning `high` por padrão.
 - `behavior-validator`: temporariamente desabilitada por `skills/behavior-validator/.disabled`.

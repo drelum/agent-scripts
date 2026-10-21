@@ -22,7 +22,7 @@ Usar `gcloud` diretamente para localizar evidências do incidente. Ler [referenc
 4. Refinar consultas que atinjam o limite ou tenham saída truncada. Confirmar sucesso do comando antes de processar JSON; saída vazia não prova saúde do serviço.
 5. Se a exceção não foi registrada, declarar a lacuna e indicar a próxima evidência necessária, como resposta HTTP ou handler correspondente à versão publicada. Não repetir indefinidamente a mesma busca.
 
-Logs de build explicam construção/deploy; logs de runtime explicam execução. Frontend e componentes Eve podem estar em outros provedores: confirmar o componente antes de procurar tudo no Google Cloud. Para promoção autorizada, usar `aura-beta-promotion`.
+Logs de build explicam construção/deploy; logs de runtime explicam execução. Frontend e componentes Eve podem estar em outros provedores: confirmar o componente antes de procurar tudo no Google Cloud.
 
 ## Limites e relato
 
