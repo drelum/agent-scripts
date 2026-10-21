@@ -28,6 +28,15 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 - Corrigir avisos sem ocultá-los com `--quiet`, desligar regras ou reduzir a cobertura. Reportar dívida preexistente e exceções aprovadas separadamente.
 - O Painel já usa Vite+ e seu `pnpm gate` inclui os agentes e o Eve Kit externo; cada componente conserva suas verificações próprias.
 
+## agent-browser
+<!-- read_when: Instalar, atualizar ou diagnosticar versões do agent-browser no WSL e Windows. -->
+
+- Usar a CLI global: WSL nos fluxos Linux; Windows no wrapper `windows-chrome-browser`. Evitar `npx` e dependências locais nos projetos.
+- Consultar `npm view agent-browser version`; instalar a mesma versão explícita com `npm install -g agent-browser@<versão>` no WSL, em cada Node utilizado pelo NVM, e no Windows.
+- Validar `agent-browser --version` em cada ambiente e carregar `agent-browser skills get core`. O clone em `~/Projects/oss/agent-browser` é fonte de consulta, não uma instalação da CLI.
+- Atualizações não encerram sessões existentes. Daemons antigos ou backups bloqueados por processos Windows devem ser tratados após o encerramento autorizado dessas sessões.
+- Em 05/10/2026, versão 0.38.2 instalada nos dois ambientes; execução validada no WSL. No Windows, Device Guard bloqueou o novo executável por requisito de assinatura (evento Code Integrity 3077). Instalação concluída não comprova execução; não desabilitar a política como parte da atualização.
+
 ## Exclusão recuperável
 - `./bin/trash <caminho> [...]`: wrapper canônico para `gio trash`; publicar como `~/.local/bin/trash` para funcionar também em agentes e shells não interativos.
 
@@ -41,8 +50,10 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
   `./bin/gws-aitrus auth login --services gmail,calendar,drive,docs,sheets,slides`
 - Não usar `--full` nesse fluxo: ele acrescenta `cloud-platform`, submetendo o token ao Google Cloud Session Control e ao erro `invalid_rapt`. Após o login, confirmar em `./bin/gws-aitrus auth status` que `cloud-platform` não aparece em `scopes`; se persistir por grant anterior, revogar/limpar a autorização antiga e autenticar novamente.
 - Login pessoal:
-  `./bin/gws-pessoal auth login --services drive,docs,sheets,slides,gmail`
-- Se a conta pessoal falhar com permissao do projeto Google, confirmar que `drelum@gmail.com` esta como OAuth test user e com IAM `Service Usage Consumer` no projeto OAuth.
+  `./bin/gws-pessoal auth login --services gmail,calendar,drive,docs,sheets,slides`
+- GWS pessoal: cliente OAuth Desktop no projeto Google Cloud `pessoal-drelum` (número `267502056062`), conta `drelum@gmail.com`; evitar `--full` e conferir ausência de `cloud-platform` após login.
+- Cofre pessoal: projeto Infisical **Pessoal** (`afbf1c7e-b8ce-4ec6-a1da-128767aad718`), ambiente `dev`, pasta `/GWS`. Segredos `GWS_PESSOAL_CLIENT_JSON` e `GWS_PESSOAL_CREDENTIALS_JSON`; acessar pelo perfil autorizado, sem imprimir valores. O wrapper mantém a configuração nativa local; outros hosts precisam provisionar as credenciais a partir desse cofre.
+- Em 05/10/2026, OAuth pessoal External/In production, com nova autorização validada após a mudança. Página inicial `https://drelum.github.io/` e política `https://drelum.github.io/privacidade/`; fontes no repositório público `drelum/drelum.github.io`. O aplicativo continua sem verificação formal do Google e pode exibir esse aviso no login. Se retornar a Testing, as autorizações voltam a ter limite de sete dias; conferir a audiência e o status antes de reautenticar.
 
 ## Eve Eval isolado
 - Timeouts de transporte pertencem ao EVE instalado. O wrapper não define `WORKFLOW_LOCAL_BODY_TIMEOUT_MS`/`WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS`; preserva overrides explícitos e registra `null` quando ausentes. EVE ≥0.45.2 já evita replay de entregas longas. Limite a bateria com `timeoutMs`/`--timeout` nativos, não com um timeout HTTP menor.
@@ -65,6 +76,7 @@ Esta pasta reune os helpers de guardrail para facilitar reuso em outros reposito
 - Substituição explícita de diretórios reais com nomes canônicos: `./script/sync-codex-skills.sh --replace-existing`.
 
 ### Skills canônicas
+- `aura-incident-investigation`: investigação somente leitura de frontend, backend, cotação e Sync; correlaciona logs, eventos/sessões PostHog e dados persistidos, prioriza impacto e prepara diagnósticos/tickets. Usa `aura-posthog` para download, reprodução e frames; inclui onboarding e auxiliares de acesso portáteis.
 - `aura-store-data-diagnosis`: diagnóstico somente leitura de divergências de estoque, vendas e custo do ERP; rastreia aquisição, transformação, bases, API e tela, com identidade e horários comparáveis.
 - `aura-posthog`: análise somente leitura do uso do Aura no PostHog (navegação, carrinho, envio de pedido e erros), com descoberta de eventos a cada uso, resolução de e-mail pelo cadastro Aura e mascaramento de tokens; executor em `skills/aura-posthog/scripts/aura-posthog`.
 - `aura-beta-promotion`: prepara e valida promoções do monorepo Beta para as branches oficiais `beta` do Aura e Aura UI, com snapshot subtree, autorização final, monitoramento do provedor e smoke funcional.
