@@ -22,3 +22,8 @@ __pycache__/
 /herdr-resume-five.json
 /herdr-resume-rest.json
 /openwa-listen-new-messages.mjs
+
+# Skills instaladas pelo posthog-cli, evidências temporárias e experimentos locais.
+/.agents/
+/.tmp-*/
+/experiments/
