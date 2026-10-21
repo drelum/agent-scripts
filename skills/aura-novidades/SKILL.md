@@ -91,7 +91,7 @@ Valem até o Andre mudar; ao mudar, atualizar aqui (com a data) e, se for regra 
 | Aprovação | O Andre aprova o primeiro vídeo de cada tela nova (rota nunca gravada) e todo desenho novo do site; o resto segue pelos checklists. |
 | Dados | Loja padrão: Drogarias da Vovó (`05101867000157`). Outra loja só quando o caso real exige, sempre mascarada. O roteiro só usa o que existe na loja hoje. |
 | Peso (21/10/2026) | Vídeos e imagens no Git do Context; rever com o Andre quando o pack do Context passar de ~300 MB. |
-| Publicação (21/10/2026) | Cloudflare Pages (projeto `aitrus-novidades`, conta Aitrus): merge na `main` que toca `aitrus/novidades/` ou `aitrus/marca/` publica em ~1 min; cada branch ganha prévia em `<branch>.aitrus-novidades.pages.dev`. |
+| Publicação (21/10/2026) | **Pendente de OK do Andre.** Planejado: Cloudflare Pages ligado ao Context (merge na `main` que toca `aitrus/novidades/` ou `aitrus/marca/` publica; prévia por branch). Até lá, o site no ar é a versão antiga, na Vercel (`aura-novidades`), e nada novo é publicado. |
 | Formatos | Só o MP4 1440×900 do site; 9:16 para redes fica para decisão futura. |
 
 ## Quando rodar
@@ -234,9 +234,9 @@ grande: dividir em inspeções menores. Mudança no `build.mjs`: rodar também `
 ### 8. Commit e publicação
 
 Commitar na branch do Context (`feat(novidades): …`), com `entradas/`, `meses/`, `contexto/`,
-`img/`, `video/`, `roteiros/`, e abrir o pull request. Conferir a prévia
-`https://<branch>.aitrus-novidades.pages.dev` (barras viram hífens). Com OK do Andre, merge na
-`main`: o Pages publica em ~1 min. Depois, conferir no ar que a home, o mês e cada novidade nova
+`img/`, `video/`, `roteiros/`, e abrir o pull request. Quando o Pages existir (ver "Publicação" nas
+decisões): conferir a prévia `https://<branch>.aitrus-novidades.pages.dev` (barras viram hífens) e,
+com OK do Andre, fazer o merge na `main`, que publica em ~1 min. Depois, conferir no ar que a home, o mês e cada novidade nova
 respondem 200 em `https://novidades.aitrus.com.br`. Mudanças da skill vão para
 `~/Projects/agent-scripts`, em branch e commit separados.
 
