@@ -302,7 +302,7 @@ def executar(nav: Navegador, acao: list, esperas: list | None = None, t0: float 
         nav("scrollintoview", args[0])
         time.sleep(0.5)
     elif verbo == "esperar_texto":
-        nav("wait", "--text", args[0])
+        esperar_texto(nav, args[0])
     elif verbo == "esperar_fn":
         nav("wait", "--fn", args[0])
     elif verbo == "esperar":
@@ -313,11 +313,17 @@ def executar(nav: Navegador, acao: list, esperas: list | None = None, t0: float 
         raise Reprovado(f"ação desconhecida no roteiro: {verbo}")
 
 
+def esperar_texto(nav: Navegador, texto: str) -> None:
+    """Espera o texto na página sem diferenciar caixa: título com text-transform vem em caixa-alta no innerText."""
+    alvo = json.dumps(texto.casefold())
+    nav("wait", "--fn", f"document.body.innerText.toLowerCase().includes({alvo})")
+
+
 def esperar_pronto(nav: Navegador, pronto: dict | None) -> None:
     if not pronto:
         return
     if "texto" in pronto:
-        nav("wait", "--text", pronto["texto"])
+        esperar_texto(nav, pronto["texto"])
     if "seletor" in pronto:
         nav("wait", pronto["seletor"])
     if "fn" in pronto:
