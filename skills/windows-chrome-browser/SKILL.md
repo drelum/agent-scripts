@@ -40,10 +40,10 @@ After `start`, ask Andre to authenticate when required, then rerun `status`. Nev
 
 ```bash
 <skill-dir>/scripts/windows-chrome-browser run --profile aitrus --session gmail-triage -- tab <targetId>
-<skill-dir>/scripts/windows-chrome-browser run --profile aitrus --session gmail-triage -- snapshot -i -c -d 3
+<skill-dir>/scripts/windows-chrome-browser run --profile aitrus --session gmail-triage -- snapshot -i -c -d 3 --delta
 ```
 
-Re-snapshot after page changes. Use viewport `1366x768` by default unless the user or task specifies another.
+Re-snapshot after page changes with the same scope and `--delta` (first call returns full state, then only changes or `unchanged`); use `--delta --full` to refresh the baseline after switching tabs or losing context. Use viewport `1366x768` by default unless the user or task specifies another.
 
 5. Close only tabs created by the current task, using `tab close <targetId>`. Leave Chrome, profiles, human tabs, and unrelated sessions open.
 
