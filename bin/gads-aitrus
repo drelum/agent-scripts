@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# Google Ads da aitrus (conta 4835940158), só leitura, por GAQL.
+# Credencial: o login principal do gcloud (André) impersona a conta de serviço
+# google-ads-agent@aitrus-shared-prod (escopo adwords). Nenhuma chave local.
+# Login vencido (invalid_rapt/invalid_grant): ! gcloud auth login --update-adc
+#
+# Uso:
+#   gads-aitrus query '<GAQL>'                       linhas da API em JSON (lista)
+#   gads-aitrus campanhas [início] [fim]             TSV por campanha (padrão: últimos 30 dias)
+#   gads-aitrus grupos [início] [fim]                TSV por grupo de anúncios
+#   gads-aitrus palavras [início] [fim]              TSV por palavra-chave, com índice de qualidade
+#   gads-aitrus termos [início] [fim]                TSV dos termos de pesquisa reais
+#   gads-aitrus conversoes                           ações de conversão e configuração
+# Datas AAAA-MM-DD no fuso da conta (America/Sao_Paulo). Custo em R$.
+# Só usa googleAds:searchStream (leitura); nunca chama endpoints de alteração (mutate).
+set -euo pipefail
+export PATH="$HOME/.local/bin:$PATH" # jq fica em ~/.local/bin
+
+CUSTOMER="${GADS_CUSTOMER:-4835940158}"
+VERSION="${GADS_API_VERSION:-v26}"
+SA="google-ads-agent@aitrus-shared-prod.iam.gserviceaccount.com"
+
+token() {
+  local user
+  if ! user="$(gcloud auth print-access-token 2>/dev/null)"; then
+    echo "gads-aitrus: login do gcloud vencido. Peça ao André: ! gcloud auth login --update-adc" >&2
+    exit 2
+  fi
+  # Token só por stdin (curl -K -), nunca na linha de comando.
+  printf 'header = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\n' "$user" |
+    curl -sS --fail-with-body -K - -X POST \
+      --data '{"scope":["https://www.googleapis.com/auth/adwords"]}' \
+      "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/$SA:generateAccessToken" |
+    jq -r '.accessToken'
+}
+
+query() { # GAQL → lista JSON de linhas
+  local t body out
+  t="$(token)"
+  body="$(jq -nc --arg q "$1" '{query:$q}')"
+  if ! out="$(printf 'header = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\n' "$t" |
+    curl -sS --fail-with-body -K - -X POST --data "$body" \
+      "https://googleads.googleapis.com/$VERSION/customers/$CUSTOMER/googleAds:searchStream")"; then
+    echo "$out" | jq -r '.. | .message? // empty' 2>/dev/null | sort -u >&2 || echo "$out" >&2
+    exit 1
+  fi
+  echo "$out" | jq '[.[]?.results[]?]'
+}
+
+periodo() { # início fim → cláusula de data (padrão: últimos 30 dias, sem hoje)
+  local ini="${1:-$(date -d '30 days ago' +%F)}" fim="${2:-$(date -d yesterday +%F)}"
+  echo "segments.date BETWEEN '$ini' AND '$fim'"
+}
+
+# Converte micros em reais e calcula CTR, CPC e custo por conversão.
+METRICAS='(.metrics.impressions // "0" | tonumber) as $i | (.metrics.clicks // "0" | tonumber) as $c
+  | ((.metrics.costMicros // "0" | tonumber) / 1e6) as $g | (.metrics.conversions // 0) as $v
+  | [$i, $c, (if $i > 0 then ($c / $i * 1000 | round / 10) else 0 end),
+     (if $c > 0 then ($g / $c * 100 | round / 100) else 0 end), ($g * 100 | round / 100), $v,
+     (if $v > 0 then ($g / $v * 100 | round / 100) else "-" end)]'
+CAB='impr	cliques	ctr%	cpc	custo	conv	custo/conv'
+
+cmd="${1:-}"
+case "$cmd" in
+  query)
+    [ $# -ge 2 ] || { echo "uso: gads-aitrus query '<GAQL>'" >&2; exit 1; }
+    query "$2"
+    ;;
+  campanhas)
+    echo "campanha	tipo	status	orçamento/dia	lance	$CAB"
+    query "SELECT campaign.name, campaign.advertising_channel_type, campaign.status, campaign.bidding_strategy_type,
+      campaign_budget.amount_micros, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions
+      FROM campaign WHERE $(periodo "${2:-}" "${3:-}")" |
+      jq -r ".[] | [.campaign.name, .campaign.advertisingChannelType, .campaign.status,
+        ((.campaignBudget.amountMicros // \"0\" | tonumber) / 1e6), .campaign.biddingStrategyType] + ($METRICAS) | @tsv"
+    ;;
+  grupos)
+    echo "campanha	grupo	status	$CAB"
+    query "SELECT campaign.name, ad_group.name, ad_group.status, metrics.impressions, metrics.clicks,
+      metrics.cost_micros, metrics.conversions FROM ad_group WHERE $(periodo "${2:-}" "${3:-}")" |
+      jq -r ".[] | [.campaign.name, .adGroup.name, .adGroup.status] + ($METRICAS) | @tsv"
+    ;;
+  palavras)
+    echo "grupo	palavra	correspondência	IQ	$CAB"
+    query "SELECT ad_group.name, ad_group_criterion.keyword.text, ad_group_criterion.keyword.match_type,
+      ad_group_criterion.quality_info.quality_score, metrics.impressions, metrics.clicks, metrics.cost_micros,
+      metrics.conversions FROM keyword_view WHERE $(periodo "${2:-}" "${3:-}")" |
+      jq -r ".[] | [.adGroup.name, .adGroupCriterion.keyword.text, .adGroupCriterion.keyword.matchType,
+        (.adGroupCriterion.qualityInfo.qualityScore // \"-\")] + ($METRICAS) | @tsv"
+    ;;
+  termos)
+    # Uma linha por termo × palavra-chave no período (soma os dias).
+    echo "grupo	termo	palavra	correspondência	status	$CAB"
+    query "SELECT ad_group.name, search_term_view.search_term, search_term_view.status,
+      segments.keyword.info.text, segments.keyword.info.match_type, metrics.impressions, metrics.clicks,
+      metrics.cost_micros, metrics.conversions FROM search_term_view WHERE $(periodo "${2:-}" "${3:-}")" |
+      jq -r "group_by([.adGroup.name, .searchTermView.searchTerm, .segments.keyword.info.text, .segments.keyword.info.matchType])
+        | map({adGroup: .[0].adGroup, searchTermView: .[0].searchTermView, segments: .[0].segments,
+               metrics: {impressions: (map(.metrics.impressions // \"0\" | tonumber) | add | tostring),
+                         clicks: (map(.metrics.clicks // \"0\" | tonumber) | add | tostring),
+                         costMicros: (map(.metrics.costMicros // \"0\" | tonumber) | add | tostring),
+                         conversions: (map(.metrics.conversions // 0) | add)}})
+        | sort_by(-(.metrics.costMicros | tonumber)) | .[]
+        | [.adGroup.name, .searchTermView.searchTerm, .segments.keyword.info.text,
+           .segments.keyword.info.matchType, .searchTermView.status] + ($METRICAS) | @tsv"
+    ;;
+  conversoes)
+    query "SELECT conversion_action.name, conversion_action.status, conversion_action.type, conversion_action.category,
+      conversion_action.primary_for_goal, conversion_action.counting_type, conversion_action.include_in_conversions_metric,
+      conversion_action.click_through_lookback_window_days, conversion_action.view_through_lookback_window_days,
+      conversion_action.attribution_model_settings.attribution_model FROM conversion_action" |
+      jq '[.[].conversionAction | del(.resourceName)]'
+    ;;
+  *)
+    sed -n '2,15p' "$0"; exit 1
+    ;;
+esac
