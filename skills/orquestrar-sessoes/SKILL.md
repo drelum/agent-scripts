@@ -1,6 +1,6 @@
 ---
 name: orquestrar-sessoes
-description: "Gerenciar outras sessões de agente no Herdr (herdr-core/hc), com este agente como gerente: abrir uma sessão visível por frente de trabalho numa aba do espaço do gerente, passar a tarefa por arquivo, esperar sem prender a conversa, revisar o relatório e encerrar. Usar quando o André pedir para delegar, abrir, acompanhar ou gerenciar sessões/agentes no Herdr."
+description: "Gerenciar outras sessões de agente no Herdr (herdr-core/hc), com este agente como gerente: abrir uma sessão por frente de trabalho como sub-agente do gerente (aninhada sob ele na lista Agents), passar a tarefa por arquivo, esperar sem prender a conversa, revisar o relatório e encerrar. Usar quando o André pedir para delegar, abrir, acompanhar ou gerenciar sessões/agentes no Herdr."
 ---
 
 # Orquestrar sessões no Herdr
@@ -21,30 +21,26 @@ Nome curto (`[a-z0-9-]`) e escopo exato. Antes, `hc templates`: se um papel serv
 - sem outras sessões nem subagentes;
 - perguntas e resultado por `hc send <endereço do gerente>` (`$HC_TERMINAL_ID` do gerente).
 
-## 3. Abrir visível numa aba nova do espaço do gerente
+## 3. Abrir como sub-agente do gerente
 
 ```sh
-space=$(hc get "$HC_TERMINAL_ID" | jq -r '.labels["herdr.space"]')
 hc run --bg --json --keep --name <nome> --cwd <repo> \
-  --label herdr.space="$space" --label herdr.tab=tb<nome sem hífen> \
   -- claude --permission-mode bypassPermissions -n <nome> "$(cat tarefa.md)"
 ```
 
+Sem os rótulos `herdr.space`/`herdr.tab`: o `hc` registra o gerente como `parent`, e a sessão aparece só uma vez na lista Agents, aninhada sob o gerente. Clicar nela mostra a tela. Com aba própria ela aparecia duas vezes (sob o gerente e como `<nome> (sessão)`), poluindo a lista (André, 10/11/2026).
+
 `bypassPermissions` espelha o modo da sessão gerente: os limites ficam na tarefa e nas skills, e qualquer consequência (commit, publicação, conta, envio) pede OK do André.
 
-## 4. Dar nome à aba
-
-Do WSL, `herdr-app` não alcança a janela (roda no Windows); usar o `.exe`. Logo após o `hc run`, a janela pode ainda não ter adotado a aba e responder `no tab` (exit 1): tentar de novo a cada 3 s até `{"ok": true}` (exit 0).
+## 4. Aba própria só se o André pedir
 
 ```sh
 E=/mnt/c/Users/drelu/AppData/Local/Programs/herdr-app/herdr-app.exe
-for i in $(seq 10); do
-  "$E" do tab.rename --id ubuntu/tb<nome sem hífen> --name "<nome> (sessão)" && break
-  sleep 3
-done
+"$E" do terminal.keep --terminal ubuntu/<endereço>   # dá uma aba
+"$E" do terminal.park --terminal ubuntu/<endereço>   # tira a aba; segue rodando sob o gerente
 ```
 
-Onde estão as sessões: `"$E" ls`.
+Do WSL, `herdr-app` não alcança a janela (roda no Windows); usar o `.exe`. Endereço sempre com o prefixo `ubuntu/`: sem ele, o comando responde `pending: true` e nunca aplica. Conferir com `"$E" ls`.
 
 ## 5. Conferir o começo
 
