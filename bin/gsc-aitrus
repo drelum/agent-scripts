@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Search Console da aitrus (sc-domain:aitrus.com.br), só leitura.
+# Credencial própria (ADC isolada com escopo webmasters.readonly), sem mexer no login principal do gcloud.
+# Login (vence com a sessão do Google Workspace):
+#   CLOUDSDK_CONFIG=$HOME/.config/gcloud-search-console gcloud auth application-default login \
+#     --scopes=openid,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly
+#   CLOUDSDK_CONFIG=$HOME/.config/gcloud-search-console gcloud auth application-default set-quota-project aitrus-aura-prod
+#
+# Uso:
+#   gsc-aitrus sites
+#   gsc-aitrus query <início AAAA-MM-DD> <fim AAAA-MM-DD> [dimensões=query,page] [limite=1000] [filtro-página-contém]
+#   gsc-aitrus inspect <url>
+#   gsc-aitrus inspect-sitemap        (todas as URLs do sitemap: situação e último rastreio, em TSV)
+#   gsc-aitrus sitemaps
+# GSC_TIPO=web|image|video|news|discover|googleNews (padrão web). Limite máximo da API: 25000 linhas por chamada.
+# Saída: JSON da API. Datas do Search Console seguem o fuso do Pacífico (o próprio relatório também).
+set -euo pipefail
+
+SITE="sc-domain:aitrus.com.br"
+SITE_ENC="sc-domain%3Aaitrus.com.br"
+QUOTA_PROJECT="aitrus-aura-prod"
+export CLOUDSDK_CONFIG="$HOME/.config/gcloud-search-console"
+
+token() {
+  if ! gcloud auth application-default print-access-token 2>/dev/null; then
+    echo "gsc-aitrus: credencial vencida ou ausente. Rode o login indicado no topo deste script." >&2
+    exit 2
+  fi
+}
+
+api() { # método url [corpo]
+  # O token vai por configuração no stdin (curl -K -), nunca na linha de comando (visível em ps).
+  local t
+  t="$(token)"
+  {
+    printf 'header = "Authorization: Bearer %s"\n' "$t"
+    printf 'header = "x-goog-user-project: %s"\n' "$QUOTA_PROJECT"
+    printf 'header = "Content-Type: application/json"\n'
+  } | if [ $# -ge 3 ]; then
+    curl -sS --fail-with-body -K - -X "$1" --data "$3" "$2"
+  else
+    curl -sS --fail-with-body -K - -X "$1" "$2"
+  fi
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  sites)
+    api GET "https://www.googleapis.com/webmasters/v3/sites"
+    ;;
+  query)
+    [ $# -ge 3 ] || { echo "uso: gsc-aitrus query <início> <fim> [dimensões] [limite] [filtro-página]" >&2; exit 1; }
+    dims="${4:-query,page}"; limit="${5:-1000}"; filtro="${6:-}"
+    body="$(jq -nc --arg s "$2" --arg e "$3" --arg d "$dims" --argjson l "$limit" --arg f "$filtro" --arg t "${GSC_TIPO:-web}" '
+      {startDate:$s, endDate:$e, dimensions:($d|split(",")), rowLimit:$l, dataState:"all", type:$t}
+      + (if $f == "" then {} else {dimensionFilterGroups:[{filters:[{dimension:"page",operator:"contains",expression:$f}]}]} end)')"
+    api POST "https://www.googleapis.com/webmasters/v3/sites/$SITE_ENC/searchAnalytics/query" "$body"
+    ;;
+  inspect)
+    [ $# -ge 2 ] || { echo "uso: gsc-aitrus inspect <url>" >&2; exit 1; }
+    api POST "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect" \
+      "$(jq -nc --arg u "$2" --arg s "$SITE" '{inspectionUrl:$u, siteUrl:$s, languageCode:"pt-BR"}')"
+    ;;
+  inspect-sitemap)
+    for u in $(curl -sS --fail https://aitrus.com.br/sitemap.xml | grep -o '<loc>[^<]*' | sed 's/<loc>//'); do
+      api POST "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect" \
+        "$(jq -nc --arg u "$u" --arg s "$SITE" '{inspectionUrl:$u, siteUrl:$s, languageCode:"pt-BR"}')" |
+        jq -r --arg u "$u" '.inspectionResult.indexStatusResult | [$u, .coverageState, (.lastCrawlTime // "-")] | @tsv'
+    done
+    ;;
+  sitemaps)
+    api GET "https://www.googleapis.com/webmasters/v3/sites/$SITE_ENC/sitemaps"
+    ;;
+  *)
+    sed -n '2,16p' "$0"; exit 1
+    ;;
+esac

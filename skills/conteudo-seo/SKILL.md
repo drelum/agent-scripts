@@ -71,7 +71,7 @@ Servidor do projeto em tmux: sessão `website`, `portless ui.website npm run dev
 - Gate uma vez, no estado final: `FULL_SUITE=1 VITEST_MAX_WORKERS=3 npm run gate` (tipos + `vp check`, testes, Knip, build). Sem `--quiet`, sem desligar regra.
 - Commit local na `main` do website (permitido pelo `AGENTS.md` do site), Conventional Commits em português: `feat: página de <tema>`, `docs: …`.
 - **Push só com OK explícito do André, a cada vez:** `git push origin main` e `git push origin main:prod` (a Cloudflare builda a `prod`). Depois: `curl -sI https://aitrus.com.br/<slug>` (200).
-- Search Console: inspeção da URL e "Solicitar indexação" no Chrome do Windows, perfil `aitrus` (skill `windows-chrome-browser`).
+- Search Console: conferir indexação com a skill `search-console` (`gsc-aitrus inspect`); "Solicitar indexação" no Chrome do Windows, perfil `aitrus` (skill `windows-chrome-browser`). Medição de desempenho também pela skill `search-console`.
 - Registrar no website: `docs/guias-de-conteudo.md` (seção nova: origem, busca, formato, processo, diferencial, decisões do André, nomes e links, ligações) e `docs/seo-pautas.md` (tema publicado, indexação pedida, data). Commit `docs:`; o push segue a mesma regra.
 
 ## Como chamar o Astra
